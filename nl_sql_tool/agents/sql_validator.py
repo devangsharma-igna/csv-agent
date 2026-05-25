@@ -26,6 +26,9 @@ def validate_sql(sql: str, context: dict) -> tuple[bool, str]:
     context["schema"].
     Returns (False, reason_str) listing any unrecognised column names.
     """
+    if not sql:
+        return False, "No SQL was generated."
+
     known_columns = {col["column"].lower() for col in context.get("schema", [])}
     sql_lower = sql.lower()
 

@@ -12,9 +12,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 import streamlit as st
 
 from utils.context_io import load_context, save_context
-from utils.mcp_client import call_tool, close_mcp_session
+from utils.mcp_client import call_tool, close_mcp_session, MCPToolError
+from utils.llm_client import chat
 from agents.context_builder import build_context, ContextBuilderError
-from agents.nl_parser import parse_query, NLParserError
+from agents.nl_parser import parse_query, NLParserError, _SYSTEM_PROMPT, _extract_result_json
 from agents.sql_validator import validate_sql
 from agents.executor import execute_query
 
@@ -39,11 +40,20 @@ async def run_pipeline(user_query: str) -> dict:
         # Phase 2 — NL Parser
         parsed = parse_query(user_query, ctx)
         result["intent"] = parsed.get("intent", "")
-        result["sql"] = parsed.get("sql", "")
+        # parsed["sql"] can be None (JSON null) when the LLM returns it explicitly;
+        # `or ""` converts both None and "" to a falsy empty string for the guard below.
+        result["sql"] = parsed.get("sql") or ""
 
-        # Phase 3 — SQL Validator (with up to 2 correction retries)
-        from utils.llm_client import chat
+        # Guard: parser returned no SQL
+        if not result["sql"]:
+            result["error"] = (
+                "The parser could not produce a SQL query for this question. "
+                "Try rephrasing as a specific data request "
+                "(e.g. 'Show me the top 10 rows' or 'Count rows by department')."
+            )
+            return result
 
+        # Phase 3 — SQL Validator with up to 2 correction retries
         known_columns = [col["column"] for col in ctx.get("schema", [])]
         retries = 0
         while retries <= 2:
@@ -55,22 +65,27 @@ async def run_pipeline(user_query: str) -> dict:
                     "Could not generate valid SQL for this query. Please rephrase."
                 )
                 return result
-            # Feed correction back into nl_parser via an extra turn
-            print(f"[main] SQL validation failed (attempt {retries+1}): {reason}")
-            from agents.nl_parser import _SYSTEM_PROMPT, _extract_result_json, _resolve_virtual_action, NLParserError
-            correction_msg = (
-                f"Observation: SQL validation failed — {reason}. "
-                f"Revise the SQL to use only these valid columns: {known_columns}. "
-                "Re-emit your FINAL Result."
-            )
-            # Re-run a single correction turn using the last parsed messages context
+
+            print(f"[main] SQL validation failed (attempt {retries + 1}): {reason}")
             correction_messages = [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f"Context:\n{json.dumps(ctx, indent=2)}\n\nUser question: {user_query}"},
-                {"role": "assistant", "content": f"Thought: FINAL: Generating SQL.\nResult: {json.dumps(parsed)}"},
-                {"role": "user", "content": correction_msg},
+                {
+                    "role": "user",
+                    "content": f"Context:\n{json.dumps(ctx, indent=2)}\n\nUser question: {user_query}",
+                },
+                {
+                    "role": "assistant",
+                    "content": f"Thought: FINAL: Generating SQL.\nResult: {json.dumps(parsed)}",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Observation: SQL validation failed — {reason}. "
+                        f"Revise the SQL to use only these valid columns: {known_columns}. "
+                        "Re-emit your FINAL Result."
+                    ),
+                },
             ]
-            from utils.llm_client import chat
             correction_response = chat(correction_messages, max_tokens=2000, temperature=0.2)
             print(f"[main] Correction response: {correction_response[:200]}")
             if "Result:" in correction_response:
@@ -102,18 +117,41 @@ async def run_pipeline(user_query: str) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Phase 0 helpers
+# Phase 0 — MCP-based table verification
 # ──────────────────────────────────────────────
 
-async def _verify_table_exists(table_name: str) -> bool:
+async def _verify_table_exists_mcp(table_name: str) -> tuple[bool, str]:
+    """
+    Calls execute_sql via MCP to confirm the table exists in the public schema.
+    Returns (True, "") on success, (False, error_message) on failure.
+    All DB communication goes through MCP by design.
+    """
+    query = (
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' "
+        f"AND table_name = '{table_name}' LIMIT 1"
+    )
     try:
-        raw = await call_tool("list_tables", {})
+        raw = await call_tool("execute_sql", {"query": query})
+        text = str(raw)
+        print(f"[phase0] MCP verify response: {text}")
+        exists = table_name.lower() in text.lower()
+        return exists, ""
+    except MCPToolError as e:
+        err = str(e)
+        print(f"[phase0] MCP error: {err}")
+        if any(w in err.lower() for w in ("authoriz", "unauthorized", "401", "forbidden", "403")):
+            return False, (
+                "MCP authorization failed. "
+                "SUPABASE_ACCESS_TOKEN must be a Personal Access Token (PAT) — "
+                "not the service role key. "
+                "Generate one at: https://supabase.com/dashboard/account/tokens"
+            )
+        return False, f"MCP error during table verification: {err}"
+    except Exception as e:
+        return False, f"Unexpected error during table verification: {e}"
+    finally:
         await close_mcp_session()
-        text = str(raw).lower()
-        return table_name.lower() in text
-    except Exception:
-        await close_mcp_session()
-        return False
 
 
 # ──────────────────────────────────────────────
@@ -163,12 +201,14 @@ if not table_name:
         submitted = st.form_submit_button("Confirm table")
 
     if submitted and table_input.strip():
-        with st.spinner("Verifying table in Supabase..."):
-            found = asyncio.run(_verify_table_exists(table_input.strip()))
+        with st.spinner("Verifying table via MCP..."):
+            found, err_msg = asyncio.run(_verify_table_exists_mcp(table_input.strip()))
         if found:
             save_context({"table_name": table_input.strip()})
             st.success(f"Table '{table_input.strip()}' confirmed.")
             st.rerun()
+        elif err_msg:
+            st.error(err_msg)
         else:
             st.error(
                 f"Table '{table_input.strip()}' not found in Supabase. "
@@ -192,8 +232,9 @@ if run_btn and user_query.strip():
         st.write(f"✓ Table verified: **{table_name}**")
 
         ctx = load_context() or {}
-        context_cached = bool(ctx.get("schema") and ctx.get("sample_rows") and ctx.get("semantic_summary"))
-
+        context_cached = bool(
+            ctx.get("schema") and ctx.get("sample_rows") and ctx.get("semantic_summary")
+        )
         if context_cached:
             st.write("✓ Context loaded (cached)")
         else:

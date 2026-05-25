@@ -26,6 +26,9 @@ Available virtual actions (no external calls — resolve from context):
   verify_columns       | <comma-separated list of column names used>
 
 SQL rules:
+- ALWAYS produce a valid SQL SELECT statement — never return null or an empty string for sql.
+- If the user asks a general question ("describe the data", "what's in this table?",
+  "show me the data"), return SELECT * FROM <table_name> LIMIT 10.
 - Only reference columns that exist in the schema.
 - Use ANSI SQL compatible with PostgreSQL.
 - Always include LIMIT 100 unless the user explicitly asks for all rows.

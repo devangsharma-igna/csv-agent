@@ -1,0 +1,236 @@
+{
+  "table_name": "medalists",
+  "columns": [
+    {
+      "name": "medalist_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "medalist_link",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "medalist_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "medal",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "delegation_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "delegation_link",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "delegation_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "country_medal_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "country_medal",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "country_medal_code2",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "country_medal_code3",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "country_medal_ioc_country_code",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "country_medal_NUTS_code",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "date_of_birth",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_located_in_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_located_in",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_coordinates",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "lat",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "lon",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "sex_or_gender_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "sex_or_gender",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_link",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_sport_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_sport",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of_sport_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of_sport",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "sport_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "sport",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts1_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts1_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_population",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_population",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_gdp",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_gdp",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts0_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts0_name",
+      "type": "text",
+      "nullable": true
+    }
+  ],
+  "semantic_summary": "The 'medalists' table contains detailed information about Olympic medalists, including their Wikidata IDs, names, links to Wikipedia pages, and the type of medal won (gold, silver, bronze). It also records the delegation they represented, with links and codes for their country, including ISO and IOC codes. Each medalist's date and place of birth are provided, along with Wikidata IDs and coordinates for their birthplace. The table includes gender information, event details (such as event name, sport, and related Wikidata IDs), and links to event pages. Additionally, the table tracks the sport and its Wikidata ID. Regional information is included via NUTS codes and names, as well as population and GDP data for NUTS regions, though these fields often contain 'NA'. This table is useful for analyzing Olympic medalists by country, event, sport, region, and demographic attributes."
+}

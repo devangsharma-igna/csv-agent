@@ -13,24 +13,29 @@ language questions into accurate SQL.
 Use the ReAct pattern strictly. At each step emit exactly one of:
 
   Thought: <your reasoning about what to do next>
-  Action: <tool_name> | <JSON arguments>
+  Action: execute_sql | {"query": "<SQL>"}
 
 Or, when done:
 
   Thought: FINAL: <your complete conclusion>
   Result: <valid JSON matching the required output schema>
 
-Available actions:
-  list_tables        | {}
-  get_table_schema   | {"table_name": "<name>"}
-  execute_sql        | {"query": "SELECT * FROM <table> LIMIT 5"}
+The only available action is execute_sql. Use it for all DB access.
+
+Step 1 — Fetch the exact column schema (always do this first):
+  Action: execute_sql | {"query": "SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '<table_name>' ORDER BY ordinal_position"}
+
+Step 2 — Fetch sample rows:
+  Action: execute_sql | {"query": "SELECT * FROM <table_name> LIMIT 5"}
+
+Step 3 — Emit FINAL Result with the required JSON.
 
 Rules:
-- Only call tools that exist in Available actions.
-- Every column in the schema must appear in the semantic_summary.
-- The semantic_summary must be written in plain English a business
-  analyst could understand.
-- Do not guess types or nullability — read them from the schema tool.
+- Use information_schema.columns for column types and nullability — never guess them.
+- Do not call get_table_schema or list_tables — they are not available.
+- Every column returned by information_schema.columns must appear in the output schema array.
+- Every column must appear in the semantic_summary.
+- The semantic_summary must be written in plain English a business analyst could understand.
 - Do not fabricate sample data — read it from execute_sql.\
 """
 
@@ -93,13 +98,24 @@ def _extract_result_json(text: str) -> dict:
 
 
 async def _dispatch_action(response_text: str) -> str:
-    """Parses 'Action: <tool_name> | <json_args>' and calls the MCP tool."""
+    """Parses 'Action: execute_sql | {"query": "..."}' and calls the MCP tool."""
     match = re.search(r"Action:\s*(\w+)\s*\|\s*(\{.*?\})", response_text, re.DOTALL)
     if not match:
-        return "No valid Action found in response. Please emit a valid Action or FINAL Result."
+        return (
+            "No valid Action found. The only available action is:\n"
+            "  Action: execute_sql | {\"query\": \"<SQL>\"}\n"
+            "Use information_schema.columns to get schema, then SELECT * LIMIT 5 for samples."
+        )
 
     tool_name = match.group(1).strip()
     raw_args = match.group(2).strip()
+
+    if tool_name != "execute_sql":
+        return (
+            f"Tool '{tool_name}' is not available. "
+            "The only available action is execute_sql. "
+            "Use information_schema.columns to fetch schema instead of get_table_schema."
+        )
 
     try:
         arguments = json.loads(raw_args)
@@ -107,7 +123,7 @@ async def _dispatch_action(response_text: str) -> str:
         return f"Could not parse action arguments as JSON: {e}"
 
     try:
-        result = await call_tool(tool_name, arguments)
+        result = await call_tool("execute_sql", arguments)
         return str(result)
     except Exception as e:
-        return f"Tool '{tool_name}' error: {e}"
+        return f"execute_sql error: {e}"
