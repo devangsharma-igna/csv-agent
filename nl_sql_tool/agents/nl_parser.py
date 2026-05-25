@@ -29,13 +29,14 @@ SQL rules:
 - ALWAYS produce a valid SQL SELECT statement — never return null or an empty string for sql.
 - If the user asks a general question ("describe the data", "what's in this table?",
   "show me the data"), return SELECT * FROM <table_name> LIMIT 10.
-- Only reference columns that exist in the schema.
+- ONLY reference column names that appear in the context "columns" array — never invent,
+  guess, or alias column names. If unsure, call verify_columns first.
+- You MAY (and should) select multiple columns when needed to fully answer the question.
 - Use ANSI SQL compatible with PostgreSQL.
 - Always include LIMIT 100 unless the user explicitly asks for all rows.
 - Use CTEs only when aggregating over a subquery.
 - Use exact column names from the schema — no aliases unless necessary.
-- Prefer simple WHERE clauses; avoid LIKE unless the user implies
-  a partial text match.
+- Prefer simple WHERE clauses; avoid LIKE unless the user implies a partial text match.
 - When the user asks for 'top N', use ORDER BY + LIMIT N.
 - When filtering by date, use ISO 8601 format in the WHERE clause.\
 """
@@ -50,21 +51,37 @@ def parse_query(user_query: str, context: dict) -> dict:
     Runs the ReAct loop (no live MCP calls) to produce:
       {"intent": "...", "sql": "SELECT ..."}
     """
-    user_msg = f"Context:\n{json.dumps(context, indent=2)}\n\nUser question: {user_query}"
+    # Build an explicit column list to reinforce the no-hallucination constraint
+    columns = context.get("columns", [])
+    column_names = [col["name"] for col in columns]
+
+    user_msg = (
+        f"Context:\n{json.dumps(context, indent=2)}\n\n"
+        f"IMPORTANT — Valid column names for this table (use ONLY these, no others):\n"
+        f"{json.dumps(column_names)}\n\n"
+        f"User question: {user_query}"
+    )
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user_msg},
     ]
 
+    print(f"[nl_parser] Starting parse for query: {user_query!r}")
+    print(f"[nl_parser] Table: {context.get('table_name')}, columns available: {len(column_names)}")
+
     for iteration in range(5):
+        print(f"[nl_parser] --- Iteration {iteration} ---")
         response_text = chat(messages, max_tokens=2000, temperature=0.2)
-        print(f"[nl_parser] iter {iteration}: {response_text[:200]}")
+        print(f"[nl_parser] LLM response (iter {iteration}):\n{response_text}")
         messages.append({"role": "assistant", "content": response_text})
 
         if "FINAL:" in response_text and "Result:" in response_text:
-            return _extract_result_json(response_text)
+            result = _extract_result_json(response_text)
+            print(f"[nl_parser] FINAL result: intent={result.get('intent')!r}, sql={result.get('sql')!r}")
+            return result
 
         observation = _resolve_virtual_action(response_text, context)
+        print(f"[nl_parser] Observation (iter {iteration}): {observation}")
         messages.append({"role": "user", "content": f"Observation: {observation}"})
 
     raise NLParserError("NL parser did not converge in 5 iterations")
@@ -88,7 +105,8 @@ def _resolve_virtual_action(response_text: str, context: dict) -> str:
     argument = match.group(2).strip()
 
     if action == "read_schema":
-        return json.dumps(context.get("schema", []))
+        # Return columns array — same key as stored in context.json
+        return json.dumps(context.get("columns", []))
     elif action == "read_sample_rows":
         return json.dumps(context.get("sample_rows", []))
     elif action == "read_semantic_summary":
@@ -96,11 +114,20 @@ def _resolve_virtual_action(response_text: str, context: dict) -> str:
     elif action == "draft_sql":
         return "Draft noted. Proceed to verify_columns."
     elif action == "verify_columns":
-        known = {col["column"].lower() for col in context.get("schema", [])}
+        # Column names stored under 'name' key in the columns array
+        known = {col["name"].lower() for col in context.get("columns", [])}
         candidates = [c.strip().lower() for c in argument.split(",") if c.strip()]
         unknown = [c for c in candidates if c and c not in known]
         if unknown:
-            return f"Unknown columns: {unknown}"
-        return "OK"
+            valid_list = sorted(known)
+            return (
+                f"Unknown columns: {unknown}. "
+                f"Valid column names are: {valid_list}"
+            )
+        return "OK — all columns verified."
     else:
-        return f"Unknown virtual action '{action}'. Use one of: read_schema, read_sample_rows, read_semantic_summary, draft_sql, verify_columns."
+        return (
+            f"Unknown virtual action '{action}'. "
+            "Use one of: read_schema, read_sample_rows, read_semantic_summary, "
+            "draft_sql, verify_columns."
+        )

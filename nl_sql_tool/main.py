@@ -21,12 +21,57 @@ from agents.executor import execute_query
 
 
 # ──────────────────────────────────────────────
+# Shared table existence check (circuit-breaker)
+# ──────────────────────────────────────────────
+
+async def _check_table_exists(table_name: str) -> tuple[bool, str]:
+    """
+    Verifies the table exists in the public schema via MCP.
+    Used as a circuit-breaker at the start of every pipeline run
+    and during initial table registration.
+    Returns (True, "") if found, (False, error_message) otherwise.
+    """
+    query = (
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' "
+        f"AND table_name = '{table_name}' LIMIT 1"
+    )
+    print(f"[circuit_breaker] Checking table existence: '{table_name}'")
+    try:
+        raw = await call_tool("execute_sql", {"query": query})
+        text = str(raw)
+        print(f"[circuit_breaker] MCP response: {text}")
+        exists = table_name.lower() in text.lower()
+        if exists:
+            print(f"[circuit_breaker] Table '{table_name}' confirmed.")
+        else:
+            print(f"[circuit_breaker] Table '{table_name}' NOT found in response.")
+        return exists, ""
+    except MCPToolError as e:
+        err = str(e)
+        print(f"[circuit_breaker] MCPToolError: {err}")
+        if any(w in err.lower() for w in ("authoriz", "unauthorized", "401", "forbidden", "403")):
+            return False, (
+                "MCP authorization failed. "
+                "SUPABASE_ACCESS_TOKEN must be a Personal Access Token (PAT) — "
+                "not the service role key. "
+                "Generate one at: https://supabase.com/dashboard/account/tokens"
+            )
+        return False, f"MCP error during table check: {err}"
+    except Exception as e:
+        print(f"[circuit_breaker] Unexpected error: {e}")
+        return False, f"Unexpected error during table check: {e}"
+
+
+# ──────────────────────────────────────────────
 # Pipeline
 # ──────────────────────────────────────────────
 
 async def run_pipeline(user_query: str) -> dict:
     """
-    Runs all four phases in order.
+    Runs all phases in order. Table existence is checked first as a circuit-breaker.
+    Context build is skipped entirely if already cached — it only runs when there is
+    no cached context (first run) or after the user clicks 'Rebuild context'.
     Returns a result dict with keys: intent, sql, rows (or error).
     """
     result = {"intent": "", "sql": "", "rows": None, "error": None}
@@ -34,17 +79,43 @@ async def run_pipeline(user_query: str) -> dict:
         ctx = load_context() or {}
         table_name = ctx.get("table_name", "")
 
-        # Phase 1 — Context Builder
-        ctx = await build_context(table_name)
+        if not table_name:
+            result["error"] = "No table configured. Please set a table first."
+            return result
 
-        # Phase 2 — NL Parser
+        # ── Circuit-breaker: verify table exists before doing any work ──
+        print(f"[pipeline] Phase 0 — table existence check for '{table_name}'")
+        found, err_msg = await _check_table_exists(table_name)
+        if not found:
+            result["error"] = err_msg or (
+                f"Table '{table_name}' no longer exists in Supabase. "
+                "Please re-import your CSV or choose a different table."
+            )
+            return result
+        print(f"[pipeline] Phase 0 passed — table '{table_name}' exists.")
+
+        # ── Phase 1 — Context Builder (only if not already cached) ──
+        context_ready = bool(
+            ctx.get("table_name") == table_name
+            and ctx.get("columns")
+            and ctx.get("semantic_summary")
+        )
+        if context_ready:
+            print(f"[pipeline] Phase 1 — context already cached, skipping build.")
+        else:
+            print(f"[pipeline] Phase 1 — no cached context, building now...")
+            ctx = await build_context(table_name)
+            print(f"[pipeline] Phase 1 complete — "
+                  f"{len(ctx.get('columns', []))} columns loaded.")
+
+        # ── Phase 2 — NL Parser ──
+        print(f"[pipeline] Phase 2 — parsing query: {user_query!r}")
         parsed = parse_query(user_query, ctx)
         result["intent"] = parsed.get("intent", "")
-        # parsed["sql"] can be None (JSON null) when the LLM returns it explicitly;
-        # `or ""` converts both None and "" to a falsy empty string for the guard below.
+        # parsed["sql"] can be None (JSON null); `or ""` normalises to falsy empty string
         result["sql"] = parsed.get("sql") or ""
+        print(f"[pipeline] Phase 2 complete — intent={result['intent']!r}, sql={result['sql']!r}")
 
-        # Guard: parser returned no SQL
         if not result["sql"]:
             result["error"] = (
                 "The parser could not produce a SQL query for this question. "
@@ -53,25 +124,33 @@ async def run_pipeline(user_query: str) -> dict:
             )
             return result
 
-        # Phase 3 — SQL Validator with up to 2 correction retries
-        known_columns = [col["column"] for col in ctx.get("schema", [])]
+        # ── Phase 3 — SQL Validator with up to 2 correction retries ──
+        print(f"[pipeline] Phase 3 — validating SQL...")
+        known_columns = [col["name"] for col in ctx.get("columns", [])]
         retries = 0
         while retries <= 2:
             valid, reason = validate_sql(result["sql"], ctx)
             if valid:
+                print(f"[pipeline] Phase 3 passed on attempt {retries + 1}.")
                 break
             if retries == 2:
+                print(f"[pipeline] Phase 3 FAILED after 2 correction attempts: {reason}")
                 result["error"] = (
                     "Could not generate valid SQL for this query. Please rephrase."
                 )
                 return result
 
-            print(f"[main] SQL validation failed (attempt {retries + 1}): {reason}")
+            print(f"[pipeline] Phase 3 validation failed (attempt {retries + 1}): {reason}")
             correction_messages = [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"Context:\n{json.dumps(ctx, indent=2)}\n\nUser question: {user_query}",
+                    "content": (
+                        f"Context:\n{json.dumps(ctx, indent=2)}\n\n"
+                        f"IMPORTANT — Valid column names (use ONLY these):\n"
+                        f"{json.dumps(known_columns)}\n\n"
+                        f"User question: {user_query}"
+                    ),
                 },
                 {
                     "role": "assistant",
@@ -81,77 +160,46 @@ async def run_pipeline(user_query: str) -> dict:
                     "role": "user",
                     "content": (
                         f"Observation: SQL validation failed — {reason}. "
-                        f"Revise the SQL to use only these valid columns: {known_columns}. "
+                        f"Revise the SQL to use ONLY these valid columns: {known_columns}. "
                         "Re-emit your FINAL Result."
                     ),
                 },
             ]
             correction_response = chat(correction_messages, max_tokens=2000, temperature=0.2)
-            print(f"[main] Correction response: {correction_response[:200]}")
+            print(f"[pipeline] Phase 3 correction response:\n{correction_response}")
             if "Result:" in correction_response:
                 try:
                     parsed = _extract_result_json(correction_response)
                     result["intent"] = parsed.get("intent", result["intent"])
                     result["sql"] = parsed.get("sql", result["sql"])
-                except Exception:
-                    pass
+                    print(f"[pipeline] Phase 3 corrected SQL: {result['sql']!r}")
+                except Exception as ex:
+                    print(f"[pipeline] Phase 3 could not extract corrected JSON: {ex}")
             retries += 1
 
-        # Phase 4 — Executor
+        # ── Phase 4 — Executor ──
+        print(f"[pipeline] Phase 4 — executing SQL: {result['sql']!r}")
         rows = await execute_query(result["sql"])
         if isinstance(rows, dict) and "error" in rows:
+            print(f"[pipeline] Phase 4 error: {rows['error']}")
             result["error"] = rows["error"]
         else:
+            print(f"[pipeline] Phase 4 complete — {len(rows)} rows returned.")
             result["rows"] = rows
 
     except ContextBuilderError as e:
+        print(f"[pipeline] ContextBuilderError: {e}")
         result["error"] = f"Context builder failed: {e}"
     except NLParserError as e:
+        print(f"[pipeline] NLParserError: {e}")
         result["error"] = f"Query parser failed: {e}"
     except Exception as e:
+        print(f"[pipeline] Unexpected error: {e}")
         result["error"] = f"Unexpected error: {e}"
     finally:
         await close_mcp_session()
 
     return result
-
-
-# ──────────────────────────────────────────────
-# Phase 0 — MCP-based table verification
-# ──────────────────────────────────────────────
-
-async def _verify_table_exists_mcp(table_name: str) -> tuple[bool, str]:
-    """
-    Calls execute_sql via MCP to confirm the table exists in the public schema.
-    Returns (True, "") on success, (False, error_message) on failure.
-    All DB communication goes through MCP by design.
-    """
-    query = (
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_schema = 'public' "
-        f"AND table_name = '{table_name}' LIMIT 1"
-    )
-    try:
-        raw = await call_tool("execute_sql", {"query": query})
-        text = str(raw)
-        print(f"[phase0] MCP verify response: {text}")
-        exists = table_name.lower() in text.lower()
-        return exists, ""
-    except MCPToolError as e:
-        err = str(e)
-        print(f"[phase0] MCP error: {err}")
-        if any(w in err.lower() for w in ("authoriz", "unauthorized", "401", "forbidden", "403")):
-            return False, (
-                "MCP authorization failed. "
-                "SUPABASE_ACCESS_TOKEN must be a Personal Access Token (PAT) — "
-                "not the service role key. "
-                "Generate one at: https://supabase.com/dashboard/account/tokens"
-            )
-        return False, f"MCP error during table verification: {err}"
-    except Exception as e:
-        return False, f"Unexpected error during table verification: {e}"
-    finally:
-        await close_mcp_session()
 
 
 # ──────────────────────────────────────────────
@@ -171,6 +219,17 @@ with st.sidebar:
     else:
         st.info("No table configured.")
 
+    # Show context build status
+    context_built = bool(
+        ctx and ctx.get("columns") and ctx.get("semantic_summary")
+    ) if ctx else False
+    if current_table:
+        if context_built:
+            col_count = len(ctx.get("columns", []))
+            st.success(f"Context ready ({col_count} columns)")
+        else:
+            st.warning("Context not built yet — will build on first query.")
+
     if current_table and st.button("Change table"):
         ctx = load_context() or {}
         ctx.pop("table_name", None)
@@ -179,15 +238,17 @@ with st.sidebar:
 
     if current_table and st.button("Rebuild context"):
         ctx = load_context() or {}
-        for key in ("schema", "sample_rows", "semantic_summary"):
+        # Clear the correct keys that hold context data
+        for key in ("columns", "sample_rows", "semantic_summary"):
             ctx.pop(key, None)
         save_context(ctx)
         st.success("Context cleared. It will rebuild on your next query.")
+        st.rerun()
 
 # Main area
 st.title("NL → SQL Query Tool")
 
-# Phase 0 — Table check
+# Phase 0 — Table setup check
 ctx = load_context()
 table_name = ctx.get("table_name", "") if ctx else ""
 
@@ -202,7 +263,8 @@ if not table_name:
 
     if submitted and table_input.strip():
         with st.spinner("Verifying table via MCP..."):
-            found, err_msg = asyncio.run(_verify_table_exists_mcp(table_input.strip()))
+            found, err_msg = asyncio.run(_check_table_exists(table_input.strip()))
+            asyncio.run(close_mcp_session())
         if found:
             save_context({"table_name": table_input.strip()})
             st.success(f"Table '{table_input.strip()}' confirmed.")
@@ -227,19 +289,17 @@ run_btn = st.button("Run query", type="primary")
 if run_btn and user_query.strip():
     pipeline_result = None
 
+    # Reload context to get latest state
+    ctx = load_context() or {}
+    context_built = bool(ctx.get("columns") and ctx.get("semantic_summary"))
+
     status_placeholder = st.empty()
     with status_placeholder.container():
-        st.write(f"✓ Table verified: **{table_name}**")
-
-        ctx = load_context() or {}
-        context_cached = bool(
-            ctx.get("schema") and ctx.get("sample_rows") and ctx.get("semantic_summary")
-        )
-        if context_cached:
-            st.write("✓ Context loaded (cached)")
+        st.write(f"⟳ Checking table '{table_name}'...")
+        if context_built:
+            st.write("✓ Context already built (cached)")
         else:
-            st.write("⟳ Building context (first run or rebuild)...")
-
+            st.write("⟳ Building context (first run or after rebuild)...")
         st.write("⟳ Parsing query...")
         st.write("⟳ Validating SQL...")
         st.write("⟳ Executing...")
@@ -249,14 +309,15 @@ if run_btn and user_query.strip():
 
     status_placeholder.empty()
     with status_placeholder.container():
-        st.write(f"✓ Table verified: **{table_name}**")
-        st.write("✓ Context ready")
-        st.write("✓ Query parsed")
-        if not pipeline_result.get("error"):
+        if pipeline_result.get("error"):
+            st.write(f"✓ Table: **{table_name}**")
+            st.write("✗ Pipeline error (see below)")
+        else:
+            st.write(f"✓ Table '{table_name}' verified")
+            st.write("✓ Context ready")
+            st.write("✓ Query parsed")
             st.write("✓ SQL validated")
             st.write("✓ Executed")
-        else:
-            st.write("✗ Pipeline error")
 
     # Results
     if pipeline_result.get("error"):
