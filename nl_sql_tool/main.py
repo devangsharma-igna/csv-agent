@@ -14,8 +14,10 @@ import streamlit as st
 from utils.context_io import load_context, save_context
 from utils.mcp_client import call_tool, close_mcp_session, MCPToolError
 from utils.llm_client import chat
+from utils.figure_builder import build_figures
 from agents.context_builder import build_context, ContextBuilderError
 from agents.nl_parser import parse_query, NLParserError, _SYSTEM_PROMPT, _extract_result_json
+from agents.nl_responder import generate_nl_response
 from agents.sql_validator import validate_sql
 from agents.executor import execute_query
 
@@ -88,8 +90,8 @@ async def run_pipeline(user_query: str) -> dict:
         found, err_msg = await _check_table_exists(table_name)
         if not found:
             result["error"] = err_msg or (
-                f"Table '{table_name}' no longer exists in Supabase. "
-                "Please re-import your CSV or choose a different table."
+                f"CSV '{table_name}' no longer exists. "
+                "Please re-import your CSV."
             )
             return result
         print(f"[pipeline] Phase 0 passed — table '{table_name}' exists.")
@@ -284,6 +286,18 @@ user_query = st.text_input(
     placeholder='e.g. "Show me the top 10 customers by revenue"',
 )
 
+# Response format selector
+response_format = st.radio(
+    "Response format",
+    options=["NL", "Figures", "NL + Figures"],
+    horizontal=True,
+    help=(
+        "NL — plain-English answer  |  "
+        "Figures — auto-detected charts  |  "
+        "NL + Figures — both"
+    ),
+)
+
 run_btn = st.button("Run query", type="primary")
 
 if run_btn and user_query.strip():
@@ -319,19 +333,59 @@ if run_btn and user_query.strip():
             st.write("✓ SQL validated")
             st.write("✓ Executed")
 
-    # Results
+    # ── Results ──────────────────────────────────────────────────────────
     if pipeline_result.get("error"):
         st.error(pipeline_result["error"])
     else:
         rows = pipeline_result.get("rows", [])
-        if rows:
-            import pandas as pd
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
-            st.caption(f"Rows returned: {len(rows)}")
-        else:
-            st.info("Query executed successfully but returned no rows.")
+        sql = pipeline_result.get("sql", "")
+        ctx_now = load_context() or {}
+        semantic_summary = ctx_now.get("semantic_summary", "")
 
-    # Debug expander
+        if not rows:
+            st.info("Query executed successfully but returned no rows.")
+        else:
+            import pandas as pd
+
+            show_nl = response_format in ("NL", "NL + Figures")
+            show_fig = response_format in ("Figures", "NL + Figures")
+
+            # ── Natural Language response ─────────────────────────────
+            if show_nl:
+                with st.spinner("Generating answer..."):
+                    nl_answer = generate_nl_response(
+                        user_query=user_query.strip(),
+                        sql=sql,
+                        rows=rows,
+                        semantic_summary=semantic_summary,
+                    )
+                st.markdown(f"### Answer\n{nl_answer}")
+
+            # ── Figures ───────────────────────────────────────────────
+            if show_fig:
+                with st.spinner("Building charts..."):
+                    figures = build_figures(rows, user_query=user_query.strip())
+
+                if figures:
+                    st.markdown("### Charts")
+                    for title, fig in figures:
+                        st.subheader(title)
+                        st.plotly_chart(fig, use_container_width=True)
+                elif show_nl:
+                    # NL + Figures but no chartable data — note it quietly
+                    st.caption("No chart could be auto-detected for this result set.")
+                else:
+                    # Figures-only mode, nothing to show
+                    st.info(
+                        "No chart could be auto-detected for this result. "
+                        "Try 'NL' or 'NL + Figures' to see a text answer instead."
+                    )
+
+            # ── Raw data table (always shown below response) ──────────
+            with st.expander(f"Raw data ({len(rows)} rows)", expanded=False):
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    # ── Debug expander ────────────────────────────────────────────────────
     with st.expander("Debug — pipeline details"):
         st.subheader("SQL executed")
         st.code(pipeline_result.get("sql", ""), language="sql")

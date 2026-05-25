@@ -3,3 +3,4 @@ mcp
 streamlit
 python-dotenv
 pandas
+plotly
