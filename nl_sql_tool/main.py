@@ -212,7 +212,7 @@ st.set_page_config(page_title="NL → SQL Query Tool", layout="wide")
 
 # Sidebar
 with st.sidebar:
-    st.header("Supabase Table")
+    st.header("Database Table")
     ctx = load_context()
     current_table = ctx.get("table_name", "") if ctx else ""
 
@@ -256,11 +256,11 @@ table_name = ctx.get("table_name", "") if ctx else ""
 
 if not table_name:
     st.warning(
-        "No table found. Please import your CSV into Supabase first, "
+        "No table found. Please import your CSV into Database first, "
         "then enter the table name below."
     )
     with st.form("table_form"):
-        table_input = st.text_input("Supabase table name")
+        table_input = st.text_input("Database table name")
         submitted = st.form_submit_button("Confirm table")
 
     if submitted and table_input.strip():
@@ -275,7 +275,7 @@ if not table_name:
             st.error(err_msg)
         else:
             st.error(
-                f"Table '{table_input.strip()}' not found in Supabase. "
+                f"Table '{table_input.strip()}' not found in Database. "
                 "Check the name and try again."
             )
     st.stop()
