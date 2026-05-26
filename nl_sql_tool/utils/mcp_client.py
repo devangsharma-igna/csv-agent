@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import asyncio
@@ -8,6 +9,26 @@ from mcp.client.stdio import stdio_client
 _session: ClientSession | None = None
 _session_context = None
 _stdio_context = None
+
+
+class MCPToolError(Exception):
+    pass
+
+
+class TableNotFoundError(Exception):
+    """
+    Raised immediately when PostgreSQL returns error code 42P01
+    (undefined_table / relation does not exist).
+    Propagates uncaught through every pipeline phase so the pipeline
+    crashes instantly rather than continuing with a dead table reference.
+    """
+    def __init__(self, table_name: str, pg_message: str = ""):
+        self.table_name = table_name
+        self.pg_message = pg_message
+        super().__init__(
+            f"Table '{table_name}' no longer exists in the database. "
+            f"It may have been dropped mid-query. ({pg_message})"
+        )
 
 
 def _build_server_params() -> StdioServerParameters:
@@ -81,22 +102,76 @@ async def call_tool(tool_name: str, arguments: dict) -> any:
     """
     Starts the MCP server (or reuses a cached session),
     calls the named tool, and returns the result content.
-    Raises MCPToolError on failure.
+
+    Raises:
+      TableNotFoundError  — immediately when PostgreSQL returns 42P01
+                        (relation does not exist). Never swallowed downstream.
+      MCPToolError    — for all other MCP / DB errors.
     """
     try:
         session = await _get_session()
         result = await session.call_tool(tool_name, arguments)
+
         if result.isError:
-            raise MCPToolError(f"MCP tool '{tool_name}' returned an error: {result.content}")
-        # Return raw content list or first text item
+            # Flatten all content pieces into one searchable string
+            error_text = " ".join(
+                item.text if hasattr(item, "text") else str(item)
+                for item in result.content
+            )
+            print(f"[mcp_client] Tool error raw text: {error_text}")
+
+            # ── Circuit-breaker: detect dropped table (PG code 42P01) ──
+            if _is_table_gone(error_text):
+                table_name = _extract_relation_name(error_text) or arguments.get("query", "")
+                pg_msg = _extract_pg_message(error_text)
+                print(
+                    f"[mcp_client] 42P01 detected — raising TableNotFoundError "
+                    f"for relation '{table_name}'"
+                )
+                raise TableNotFoundError(table_name, pg_msg)
+
+            raise MCPToolError(f"MCP tool '{tool_name}' returned an error: {error_text}")
+
+        # Success — return raw content
         contents = result.content
         if len(contents) == 1 and hasattr(contents[0], "text"):
             return contents[0].text
         return [c.text if hasattr(c, "text") else c for c in contents]
-    except MCPToolError:
+
+    except (TableNotFoundError, MCPToolError):
         raise
     except Exception as e:
         raise MCPToolError(f"MCP call to '{tool_name}' failed: {e}") from e
+
+
+def _is_table_gone(error_text: str) -> bool:
+    """Returns True if the error text indicates PostgreSQL error 42P01."""
+    t = error_text.upper()
+    return "42P01" in t or (
+        "DOES NOT EXIST" in t and "RELATION" in t
+    )
+
+
+def _extract_relation_name(error_text: str) -> str:
+    """Extracts the relation name from a 42P01 error message, if present."""
+    # Matches: relation "some_table" does not exist
+    m = re.search(r'relation\s+"([^"]+)"\s+does not exist', error_text, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
+def _extract_pg_message(error_text: str) -> str:
+    """
+    Tries to pull the PostgreSQL message string out of the JSON error envelope
+    that the Supabase MCP server wraps errors in.
+    """
+    try:
+        # error_text may be the raw content of a TextContent — try JSON parse
+        data = json.loads(error_text)
+        return data.get("error", {}).get("message", "")
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    # Fallback: return first 200 chars of raw text
+    return error_text[:200]
 
 
 async def close_mcp_session() -> None:
@@ -117,7 +192,3 @@ async def close_mcp_session() -> None:
         _stdio_context = None
 
     _session = None
-
-
-class MCPToolError(Exception):
-    pass

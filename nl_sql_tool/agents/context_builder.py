@@ -1,8 +1,9 @@
 import json
 import re
 from utils.llm_client import chat
-from utils.mcp_client import call_tool
+from utils.mcp_client import call_tool, TableNotFoundError
 from utils.context_io import load_context, save_context
+from utils.row_parser import parse_rows
 
 _SYSTEM_PROMPT = """\
 You are a senior data analyst. Your job is to deeply understand a
@@ -197,6 +198,7 @@ async def _dispatch_action(response_text: str, table_name: str = "") -> tuple[st
         raw_result = await call_tool("execute_sql", arguments)
         print(f"[context_builder] MCP execute_sql result: {raw_result}")
 
+
         # Detect sample-row queries (SELECT * FROM <table> LIMIT N) and capture rows
         query_lower = arguments.get("query", "").lower()
         sample_rows: list[dict] = []
@@ -207,44 +209,13 @@ async def _dispatch_action(response_text: str, table_name: str = "") -> tuple[st
             and "information_schema" not in query_lower
         )
         if is_sample_query:
-            sample_rows = _parse_rows(raw_result)
+            sample_rows = parse_rows(raw_result)
             print(f"[context_builder] Parsed {len(sample_rows)} rows from sample query.")
 
         return str(raw_result), sample_rows
+    except TableNotFoundError:
+        # Table was dropped — propagate immediately, do not return an observation string
+        raise
     except Exception as e:
         print(f"[context_builder] MCP execute_sql error: {e}")
         return f"execute_sql error: {e}", []
-
-
-def _parse_rows(raw: object) -> list[dict]:
-    """Coerces MCP result into a list of row dicts."""
-    if isinstance(raw, list):
-        result = []
-        for item in raw:
-            if isinstance(item, dict):
-                result.append(item)
-            elif isinstance(item, str):
-                try:
-                    parsed = json.loads(item)
-                    if isinstance(parsed, list):
-                        result.extend(parsed)
-                    elif isinstance(parsed, dict):
-                        result.append(parsed)
-                except json.JSONDecodeError:
-                    pass
-        return result
-
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return parsed
-            if isinstance(parsed, dict):
-                for key in ("rows", "data", "result", "results"):
-                    if key in parsed and isinstance(parsed[key], list):
-                        return parsed[key]
-                return [parsed]
-        except json.JSONDecodeError:
-            pass
-
-    return []

@@ -22,14 +22,18 @@ _RESERVED = frozenset({
 
 def validate_sql(sql: str, context: dict) -> tuple[bool, str]:
     """
-    Returns (True, "") if every column reference in sql exists in
-    context["columns"].
+    Returns (True, "") if every column reference in sql exists in context["columns"].
     Returns (False, reason_str) listing any unrecognised column names.
+
+    Handles:
+    - Normal unquoted identifiers:  dining_rating
+    - Double-quoted identifiers:    "area/location", "features/category"
+    - Qualified references:         t.dining_rating
     """
     if not sql:
         return False, "No SQL was generated."
 
-    # Column names are stored under 'columns' key with 'name' field
+    # Build known-column set (lowercase) from context
     known_columns = {col["name"].lower() for col in context.get("columns", [])}
     table_name = context.get("table_name", "").lower()
 
@@ -37,15 +41,31 @@ def validate_sql(sql: str, context: dict) -> tuple[bool, str]:
     print(f"[sql_validator] SQL: {sql}")
     print(f"[sql_validator] Known columns: {sorted(known_columns)}")
 
+    offenders: list[str] = []
+
+    # ── 1. Check double-quoted identifiers first ───────────────────────────
+    # These cover column names with special chars like "area/location"
+    quoted_idents = re.findall(r'"([^"]+)"', sql)
+    for ident in quoted_idents:
+        ident_lower = ident.lower()
+        # Skip the table name itself quoted (e.g. "restraunts")
+        if ident_lower == table_name:
+            continue
+        if ident_lower not in known_columns and ident_lower not in _RESERVED:
+            offenders.append(f'"{ident}"')
+            print(f"[sql_validator] Unknown quoted identifier: \"{ident}\"")
+
+    # ── 2. Strip quoted identifiers and string literals from SQL, then
+    #       tokenise for unquoted identifiers ──────────────────────────────
     sql_lower = sql.lower()
-
-    # Strip string literals to avoid false matches on data values
+    # Remove string literals ('...')
     sql_stripped = re.sub(r"'[^']*'", " ", sql_lower)
+    # Remove double-quoted identifiers (already checked above)
+    sql_stripped = re.sub(r'"[^"]*"', " ", sql_stripped)
 
-    # Tokenise the whole SQL and filter
     tokens = re.findall(r"[a-z_][a-z0-9_]*", sql_stripped)
 
-    candidates = set()
+    candidates: set[str] = set()
     for token in tokens:
         if token in _RESERVED:
             continue
@@ -53,16 +73,18 @@ def validate_sql(sql: str, context: dict) -> tuple[bool, str]:
             continue
         candidates.add(token)
 
-    # Handle qualified references like "alias.column_name" — only check the column part
+    # Handle qualified references like alias.column_name
     qualified = re.findall(r"[a-z_][a-z0-9_]*\.([a-z_][a-z0-9_]*)", sql_stripped)
     for q in qualified:
         candidates.discard(q)
         candidates.add(q)
 
-    # Remove the table name itself from candidates
     candidates.discard(table_name)
 
-    offenders = [c for c in candidates if c not in known_columns and c not in _RESERVED]
+    for c in candidates:
+        if c not in known_columns and c not in _RESERVED:
+            offenders.append(c)
+            print(f"[sql_validator] Unknown unquoted token: {c}")
 
     if offenders:
         print(f"[sql_validator] Validation FAILED — unknown identifiers: {sorted(offenders)}")

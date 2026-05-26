@@ -3,6 +3,7 @@ load_dotenv()
 
 import asyncio
 import json
+import re
 import sys
 import os
 
@@ -12,7 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import streamlit as st
 
 from utils.context_io import load_context, save_context
-from utils.mcp_client import call_tool, close_mcp_session, MCPToolError
+from utils.mcp_client import call_tool, close_mcp_session, MCPToolError, TableNotFoundError
 from utils.llm_client import chat
 from utils.figure_builder import build_figures
 from agents.context_builder import build_context, ContextBuilderError
@@ -21,6 +22,23 @@ from agents.guardrail import check_query_scope
 from agents.nl_responder import generate_nl_response
 from agents.sql_validator import validate_sql
 from agents.executor import execute_query
+
+
+# ──────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────
+
+def _clear_table_context() -> None:
+    """
+    Wipes the table name and all derived context from context.json.
+    Called when TableNotFoundError is raised so the next page render forces
+    the user to re-enter a valid table name.
+    """
+    try:
+        save_context({})
+        print("[main] context.json cleared after TableNotFoundError.")
+    except Exception as ex:
+        print(f"[main] Failed to clear context.json: {ex}")
 
 
 # ──────────────────────────────────────────────
@@ -77,7 +95,7 @@ async def run_pipeline(user_query: str) -> dict:
     no cached context (first run) or after the user clicks 'Rebuild context'.
     Returns a result dict with keys: intent, sql, rows (or error).
     """
-    result = {"intent": "", "sql": "", "rows": None, "error": None, "out_of_scope": False}
+    result = {"intent": "", "sql": "", "rows": None, "error": None, "out_of_scope": False, "table_gone": False}
     try:
         ctx = load_context() or {}
         table_name = ctx.get("table_name", "")
@@ -113,8 +131,11 @@ async def run_pipeline(user_query: str) -> dict:
 
         # ── Guardrail — scope check before any LLM/SQL work ──
         print(f"[pipeline] Guardrail — checking query scope...")
+        column_names = [col["name"] for col in ctx.get("columns", [])]
         in_scope, oos_reason = check_query_scope(
-            user_query, ctx.get("semantic_summary", "")
+            user_query,
+            ctx.get("semantic_summary", ""),
+            column_names=column_names,
         )
         if not in_scope:
             print(f"[pipeline] Guardrail blocked query: {oos_reason}")
@@ -141,6 +162,19 @@ async def run_pipeline(user_query: str) -> dict:
         # ── Phase 3 — SQL Validator with up to 2 correction retries ──
         print(f"[pipeline] Phase 3 — validating SQL...")
         known_columns = [col["name"] for col in ctx.get("columns", [])]
+
+        # Build quoting note once — reused in every correction message
+        needs_quoting = [
+            n for n in known_columns
+            if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', n)
+        ]
+        quoting_note = ""
+        if needs_quoting:
+            examples = ", ".join(f'"{n}"' for n in needs_quoting)
+            quoting_note = (
+                f"\nCRITICAL — These columns MUST be double-quoted in SQL: {examples}"
+            )
+
         retries = 0
         while retries <= 2:
             valid, reason = validate_sql(result["sql"], ctx)
@@ -162,7 +196,8 @@ async def run_pipeline(user_query: str) -> dict:
                     "content": (
                         f"Context:\n{json.dumps(ctx, indent=2)}\n\n"
                         f"IMPORTANT — Valid column names (use ONLY these):\n"
-                        f"{json.dumps(known_columns)}\n\n"
+                        f"{json.dumps(known_columns)}"
+                        f"{quoting_note}\n\n"
                         f"User question: {user_query}"
                     ),
                 },
@@ -174,7 +209,8 @@ async def run_pipeline(user_query: str) -> dict:
                     "role": "user",
                     "content": (
                         f"Observation: SQL validation failed — {reason}. "
-                        f"Revise the SQL to use ONLY these valid columns: {known_columns}. "
+                        f"Revise the SQL to use ONLY these valid columns: {known_columns}."
+                        f"{quoting_note} "
                         "Re-emit your FINAL Result."
                     ),
                 },
@@ -201,6 +237,12 @@ async def run_pipeline(user_query: str) -> dict:
             print(f"[pipeline] Phase 4 complete — {len(rows)} rows returned.")
             result["rows"] = rows
 
+    except TableNotFoundError as e:
+        print(f"[pipeline] TableNotFoundError — clearing context and crashing pipeline: {e}")
+        # Wipe the stale table reference so the UI forces re-entry
+        _clear_table_context()
+        result["table_gone"] = True
+        result["error"] = str(e)
     except ContextBuilderError as e:
         print(f"[pipeline] ContextBuilderError: {e}")
         result["error"] = f"Context builder failed: {e}"
@@ -335,7 +377,9 @@ if run_btn and user_query.strip():
 
     status_placeholder.empty()
     with status_placeholder.container():
-        if pipeline_result.get("out_of_scope"):
+        if pipeline_result.get("table_gone"):
+            st.write(f"✗ Table '{table_name}' no longer exists — pipeline aborted")
+        elif pipeline_result.get("out_of_scope"):
             st.write(f"✓ Table '{table_name}' verified")
             st.write("✓ Context ready")
             st.write("✗ Query out of scope — blocked before SQL generation")
@@ -351,7 +395,16 @@ if run_btn and user_query.strip():
             st.write("✓ Executed")
 
     # ── Results ──────────────────────────────────────────────────────────
-    if pipeline_result.get("out_of_scope"):
+    if pipeline_result.get("table_gone"):
+        st.error(
+            f"**Table '{table_name}' no longer exists.**\n\n"
+            "It was dropped while the query was running. "
+            "The table configuration has been cleared automatically.\n\n"
+            "Please re-import your CSV into Supabase and enter the new table name."
+        )
+        st.rerun()   # forces the UI back to the table-entry form immediately
+
+    elif pipeline_result.get("out_of_scope"):
         st.warning(
             "**Query Out of Scope**\n\n"
             f"{pipeline_result.get('error', '')}\n\n"

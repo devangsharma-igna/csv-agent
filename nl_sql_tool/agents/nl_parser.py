@@ -36,6 +36,10 @@ SQL rules:
 - Always include LIMIT 100 unless the user explicitly asks for all rows.
 - Use CTEs only when aggregating over a subquery.
 - Use exact column names from the schema — no aliases unless necessary.
+- IMPORTANT: If a column name contains any special character (/, -, space, or anything
+  other than letters, digits, and underscores), you MUST wrap it in double quotes in the SQL.
+  Example: SELECT "area/location", "features/category" FROM restraunts
+  Failure to quote such names will cause a SQL syntax error.
 - Prefer simple WHERE clauses; avoid LIKE unless the user implies a partial text match.
 - When the user asks for 'top N', use ORDER BY + LIMIT N.
 - When filtering by date, use ISO 8601 format in the WHERE clause.\
@@ -55,10 +59,27 @@ def parse_query(user_query: str, context: dict) -> dict:
     columns = context.get("columns", [])
     column_names = [col["name"] for col in columns]
 
+    # Identify columns that need double-quoting in SQL (contain non-word characters)
+    needs_quoting = [
+        name for name in column_names
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name)
+    ]
+    quoting_note = ""
+    if needs_quoting:
+        examples = ", ".join(f'"{n}"' for n in needs_quoting)
+        quoting_note = (
+            f"\nCRITICAL — These columns contain special characters and MUST be "
+            f"double-quoted every time they appear in SQL:\n"
+            f"  {examples}\n"
+            f"Wrong:  SELECT area/location  ← syntax error\n"
+            f'Correct: SELECT "area/location"  ← required\n'
+        )
+
     user_msg = (
         f"Context:\n{json.dumps(context, indent=2)}\n\n"
         f"IMPORTANT — Valid column names for this table (use ONLY these, no others):\n"
-        f"{json.dumps(column_names)}\n\n"
+        f"{json.dumps(column_names)}"
+        f"{quoting_note}\n\n"
         f"User question: {user_query}"
     )
     messages = [
@@ -116,7 +137,10 @@ def _resolve_virtual_action(response_text: str, context: dict) -> str:
     elif action == "verify_columns":
         # Column names stored under 'name' key in the columns array
         known = {col["name"].lower() for col in context.get("columns", [])}
-        candidates = [c.strip().lower() for c in argument.split(",") if c.strip()]
+        raw_candidates = [c.strip() for c in argument.split(",") if c.strip()]
+        # Strip surrounding double-quotes that the LLM adds for special-char columns
+        # e.g. '"area/location"' → 'area/location'
+        candidates = [c.strip('"').lower() for c in raw_candidates]
         unknown = [c for c in candidates if c and c not in known]
         if unknown:
             valid_list = sorted(known)
