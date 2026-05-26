@@ -17,6 +17,7 @@ from utils.llm_client import chat
 from utils.figure_builder import build_figures
 from agents.context_builder import build_context, ContextBuilderError
 from agents.nl_parser import parse_query, NLParserError, _SYSTEM_PROMPT, _extract_result_json
+from agents.guardrail import check_query_scope
 from agents.nl_responder import generate_nl_response
 from agents.sql_validator import validate_sql
 from agents.executor import execute_query
@@ -76,7 +77,7 @@ async def run_pipeline(user_query: str) -> dict:
     no cached context (first run) or after the user clicks 'Rebuild context'.
     Returns a result dict with keys: intent, sql, rows (or error).
     """
-    result = {"intent": "", "sql": "", "rows": None, "error": None}
+    result = {"intent": "", "sql": "", "rows": None, "error": None, "out_of_scope": False}
     try:
         ctx = load_context() or {}
         table_name = ctx.get("table_name", "")
@@ -109,6 +110,17 @@ async def run_pipeline(user_query: str) -> dict:
             ctx = await build_context(table_name)
             print(f"[pipeline] Phase 1 complete — "
                   f"{len(ctx.get('columns', []))} columns loaded.")
+
+        # ── Guardrail — scope check before any LLM/SQL work ──
+        print(f"[pipeline] Guardrail — checking query scope...")
+        in_scope, oos_reason = check_query_scope(
+            user_query, ctx.get("semantic_summary", "")
+        )
+        if not in_scope:
+            print(f"[pipeline] Guardrail blocked query: {oos_reason}")
+            result["out_of_scope"] = True
+            result["error"] = oos_reason  # carries the reason for the debug expander
+            return result
 
         # ── Phase 2 — NL Parser ──
         print(f"[pipeline] Phase 2 — parsing query: {user_query!r}")
@@ -323,18 +335,29 @@ if run_btn and user_query.strip():
 
     status_placeholder.empty()
     with status_placeholder.container():
-        if pipeline_result.get("error"):
+        if pipeline_result.get("out_of_scope"):
+            st.write(f"✓ Table '{table_name}' verified")
+            st.write("✓ Context ready")
+            st.write("✗ Query out of scope — blocked before SQL generation")
+        elif pipeline_result.get("error"):
             st.write(f"✓ Table: **{table_name}**")
             st.write("✗ Pipeline error (see below)")
         else:
             st.write(f"✓ Table '{table_name}' verified")
             st.write("✓ Context ready")
+            st.write("✓ Query in scope")
             st.write("✓ Query parsed")
             st.write("✓ SQL validated")
             st.write("✓ Executed")
 
     # ── Results ──────────────────────────────────────────────────────────
-    if pipeline_result.get("error"):
+    if pipeline_result.get("out_of_scope"):
+        st.warning(
+            "**Query Out of Scope**\n\n"
+            f"{pipeline_result.get('error', '')}\n\n"
+            f"_This table covers: {(load_context() or {}).get('semantic_summary', '')[:200]}..._"
+        )
+    elif pipeline_result.get("error"):
         st.error(pipeline_result["error"])
     else:
         rows = pipeline_result.get("rows", [])
