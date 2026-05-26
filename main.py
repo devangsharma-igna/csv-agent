@@ -15,7 +15,8 @@ from utils.llm_client import chat
 from utils.figure_builder import build_figures
 from utils.csv_uploader import (
     suggest_table_name, sanitize_column_names, build_column_preview,
-    read_csv, upload_dataframe, list_existing_tables,
+    read_csv, upload_dataframe, list_existing_tables, drop_table,
+    remove_duplicates, suggest_primary_key,
 )
 from agents.context_builder import build_context, ContextBuilderError
 from agents.nl_parser import parse_query, NLParserError, _SYSTEM_PROMPT, _extract_result_json
@@ -74,10 +75,10 @@ async def _check_table_exists(table_name: str) -> tuple[bool, str]:
         print(f"[circuit_breaker] MCPToolError: {err}")
         if any(w in err.lower() for w in ("authoriz", "unauthorized", "401", "forbidden", "403")):
             return False, (
-                "MCP authorization failed. "
-                "SUPABASE_ACCESS_TOKEN must be a Personal Access Token (PAT) — "
+                "Database authorization failed. "
+                "Your access token must be a Personal Access Token (PAT) — "
                 "not the service role key. "
-                "Generate one at: https://supabase.com/dashboard/account/tokens"
+                "Generate one in your database dashboard under Account → Tokens."
             )
         return False, f"MCP error during table check: {err}"
     except Exception as e:
@@ -295,12 +296,46 @@ with st.sidebar:
 
     if current_table and st.button("Rebuild context"):
         ctx = load_context() or {}
-        # Clear the correct keys that hold context data
         for key in ("columns", "sample_rows", "semantic_summary"):
             ctx.pop(key, None)
         save_context(ctx)
         st.success("Context cleared. It will rebuild on your next query.")
         st.rerun()
+
+    # ── Delete table (circuit-breaker test / cleanup) ──────────────────────
+    if current_table:
+        st.divider()
+        st.caption("Danger zone")
+
+        # Two-click confirmation: first click arms it, second click fires it
+        if "confirm_delete" not in st.session_state:
+            st.session_state.confirm_delete = False
+
+        if not st.session_state.confirm_delete:
+            if st.button("🗑️ Delete table from DB", type="secondary"):
+                st.session_state.confirm_delete = True
+                st.rerun()
+        else:
+            st.warning(
+                f"This will **permanently drop** `{current_table}` from the database. "
+                "There is no undo."
+            )
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("Yes, delete", type="primary"):
+                    with st.spinner(f"Dropping '{current_table}'..."):
+                        del_result = drop_table(current_table)
+                    st.session_state.confirm_delete = False
+                    if del_result["success"]:
+                        _clear_table_context()
+                        st.success(del_result["message"])
+                        st.rerun()
+                    else:
+                        st.error(del_result["message"])
+            with col_no:
+                if st.button("Cancel"):
+                    st.session_state.confirm_delete = False
+                    st.rerun()
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.title("CSV Agent")
@@ -325,7 +360,7 @@ with tab_query:
             "or enter an existing table name below."
         )
         with st.form("table_form"):
-            table_input = st.text_input("Existing Supabase table name")
+            table_input = st.text_input("Existing table name")
             submitted = st.form_submit_button("Confirm table")
 
         if submitted and table_input.strip():
@@ -481,64 +516,193 @@ with tab_query:
 with tab_upload:
     import pandas as pd
 
-    st.subheader("Upload a CSV file to Supabase")
+    st.subheader("Upload a CSV file")
     st.caption(
-        "The CSV will be created as a new table in your Supabase database. "
+        "Upload a CSV to create a new table in your database. "
         "Once uploaded you can query it immediately from the Query Data tab."
     )
 
-    # ── Check SUPABASE_DATABASE_URL is configured ─────────────────────────
     db_url_set = bool(os.environ.get("SUPABASE_DATABASE_URL", "").strip())
     if not db_url_set:
         st.error(
-            "**`SUPABASE_DATABASE_URL` is not set in your `.env` file.**\n\n"
-            "Find it in: **Supabase Dashboard → Settings → Database → "
-            "Connection string → URI**\n\n"
-            "Add the following line to your `.env`:\n"
-            "```\nSUPABASE_DATABASE_URL=postgresql://postgres:[PASSWORD]"
-            "@db.[PROJECT-REF].supabase.co:5432/postgres\n```"
+            "**Database connection URL is not configured.**\n\n"
+            "Set `SUPABASE_DATABASE_URL` in your `.env` file.\n\n"
+            "Use the **Session Pooler URL** (port 5432) from your database dashboard:\n"
+            "```\nSUPABASE_DATABASE_URL=postgresql://postgres.[REF]:[PASSWORD]"
+            "@aws-0-[REGION].pooler.supabase.com:5432/postgres\n```"
         )
     else:
-        # ── File uploader ──────────────────────────────────────────────────
-        uploaded_file = st.file_uploader(
-            "Choose a CSV file",
-            type=["csv"],
-            help="Maximum recommended size: 50 MB",
-        )
+        # ── Init session state for this tab ───────────────────────────────
+        if "upload_file_name" not in st.session_state:
+            st.session_state.upload_file_name = None
+        if "pk_suggestions" not in st.session_state:
+            st.session_state.pk_suggestions = None
+
+        # ── Step 0: File uploader ──────────────────────────────────────────
+        uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"],
+                                         help="Maximum recommended size: 50 MB")
 
         if uploaded_file is not None:
-            # ── Read CSV ───────────────────────────────────────────────────
+            # Reset PK suggestions when a new file is loaded
+            if st.session_state.upload_file_name != uploaded_file.name:
+                st.session_state.upload_file_name = uploaded_file.name
+                st.session_state.pk_suggestions = None
+
             df_raw = None
             try:
                 df_raw = read_csv(uploaded_file)
             except Exception as e:
-                st.error(f"Could not read the CSV file: {e}")
+                st.error(f"Could not read CSV: {e}")
 
             if df_raw is not None:
                 st.success(
-                    f"File loaded: **{uploaded_file.name}** — "
+                    f"**{uploaded_file.name}** — "
                     f"{len(df_raw):,} rows · {len(df_raw.columns)} columns"
                 )
+                st.divider()
 
-                # ── Table name & options ───────────────────────────────────
-                col_name, col_opts = st.columns([2, 2])
-                with col_name:
+                # ══════════════════════════════════════════════════════════
+                # STEP 1 — Duplicate Rows
+                # ══════════════════════════════════════════════════════════
+                st.markdown("#### Step 1 — Duplicate Rows")
+                n_dups = int(df_raw.duplicated().sum())
+
+                if n_dups == 0:
+                    st.success("✓ No duplicate rows found.")
+                    df_clean = df_raw.copy()
+                else:
+                    pct = n_dups / len(df_raw) * 100
+                    st.warning(
+                        f"**{n_dups:,} duplicate rows detected** ({pct:.1f}% of data). "
+                        "Duplicates are exact row matches across all columns."
+                    )
+                    remove_dups = st.checkbox(
+                        f"Remove {n_dups:,} duplicate rows before upload",
+                        value=True,
+                        key="remove_dups_cb",
+                    )
+                    if remove_dups:
+                        df_clean, _ = remove_duplicates(df_raw)
+                        st.info(f"After deduplication: **{len(df_clean):,} rows** remain.")
+                    else:
+                        df_clean = df_raw.copy()
+                        st.caption("Duplicates will be kept in the uploaded table.")
+
+                st.divider()
+
+                # ══════════════════════════════════════════════════════════
+                # STEP 2 — Primary Key
+                # ══════════════════════════════════════════════════════════
+                st.markdown("#### Step 2 — Primary Key")
+
+                pk_analyze_btn = st.button(
+                    "🔍 Analyze columns for primary key",
+                    key="analyze_pk_btn",
+                    help="Uses AI to suggest which column best serves as a primary key.",
+                )
+                if pk_analyze_btn:
+                    with st.spinner("Analyzing columns…"):
+                        st.session_state.pk_suggestions = suggest_primary_key(df_clean)
+
+                # Display LLM results if available
+                selected_pk = None
+                if st.session_state.pk_suggestions:
+                    sugg_data = st.session_state.pk_suggestions
+                    suggestions = sugg_data.get("suggestions", [])
+                    composite  = sugg_data.get("composite")
+                    summary    = sugg_data.get("summary", "")
+
+                    if summary:
+                        st.info(f"💡 {summary}")
+
+                    if suggestions:
+                        # Build a display table of suggestions
+                        sugg_rows = [
+                            {
+                                "Column": s["column"],
+                                "Confidence": s["confidence"].capitalize(),
+                                "Reason": s["reason"],
+                            }
+                            for s in suggestions
+                        ]
+                        st.dataframe(
+                            pd.DataFrame(sugg_rows),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    elif composite:
+                        st.info(
+                            f"No single-column primary key found. "
+                            f"Consider a composite key: **{', '.join(composite)}**"
+                        )
+                    else:
+                        st.warning("No suitable primary key column found in this dataset.")
+
+                # PK selection: top suggestion pre-selected, user can override
+                pk_col_options = ["None (no primary key)"] + list(df_clean.columns)
+                default_pk_idx = 0
+                if st.session_state.pk_suggestions:
+                    top_suggestions = st.session_state.pk_suggestions.get("suggestions", [])
+                    if top_suggestions:
+                        top_col = top_suggestions[0]["column"]
+                        if top_col in df_clean.columns:
+                            default_pk_idx = pk_col_options.index(top_col)
+
+                pk_selection = st.selectbox(
+                    "Set primary key column",
+                    options=pk_col_options,
+                    index=default_pk_idx,
+                    help=(
+                        "Click 'Analyze columns' above for AI suggestions, "
+                        "or pick any column manually. "
+                        "Select 'None' to create the table without a primary key."
+                    ),
+                    key="pk_selectbox",
+                )
+                selected_pk = None if pk_selection == "None (no primary key)" else pk_selection
+
+                if selected_pk:
+                    # Show a quick eligibility check
+                    col_nulls = int(df_clean[selected_pk].isnull().sum())
+                    col_dups  = int(df_clean[selected_pk].duplicated().sum())
+                    if col_nulls > 0 or col_dups > 0:
+                        issues = []
+                        if col_nulls:
+                            issues.append(f"{col_nulls:,} null value(s)")
+                        if col_dups:
+                            issues.append(f"{col_dups:,} duplicate value(s)")
+                        st.error(
+                            f"⚠️ **'{selected_pk}'** cannot be a primary key: "
+                            f"{' and '.join(issues)}. "
+                            "Fix the data or choose a different column."
+                        )
+                        selected_pk = None  # block upload with bad PK
+                    else:
+                        st.success(f"✓ **'{selected_pk}'** is fully unique and non-null — valid primary key.")
+
+                st.divider()
+
+                # ══════════════════════════════════════════════════════════
+                # STEP 3 — Table Options
+                # ══════════════════════════════════════════════════════════
+                st.markdown("#### Step 3 — Table Options")
+
+                col_name_ui, col_opts_ui = st.columns([2, 2])
+                with col_name_ui:
                     default_name = suggest_table_name(uploaded_file.name)
                     table_name_input = st.text_input(
-                        "Table name in Supabase",
+                        "Table name",
                         value=default_name,
-                        help="Only letters, numbers and underscores. Auto-suggested from filename.",
+                        help="Letters, numbers, and underscores only. Auto-suggested from filename.",
                     )
-
-                with col_opts:
+                with col_opts_ui:
                     sanitize = st.checkbox(
                         "Sanitize column names",
                         value=False,
                         help=(
                             "Replace special characters (/, -, spaces) with underscores.\n"
                             "e.g. 'area/location' → 'area_location'\n"
-                            "Leave unchecked to keep original names "
-                            "(they will be double-quoted in SQL)."
+                            "Leave unchecked to keep original names (double-quoted in SQL)."
                         ),
                     )
                     if_exists = st.selectbox(
@@ -551,11 +715,25 @@ with tab_upload:
                         }[x],
                     )
 
-                # ── Preview ────────────────────────────────────────────────
-                df_preview = sanitize_column_names(df_raw.copy()) if sanitize else df_raw.copy()
+                # Apply sanitization to preview dataframe
+                df_preview = sanitize_column_names(df_clean.copy()) if sanitize else df_clean.copy()
+                # If sanitized, remap the selected PK column name too
+                preview_pk = selected_pk
+                if sanitize and selected_pk:
+                    import re as _re
+                    sanitized_name = _re.sub(r"[^a-z0-9]+", "_",
+                                             selected_pk.lower().strip()).strip("_")
+                    preview_pk = sanitized_name if sanitized_name else selected_pk
 
-                with st.expander("Column preview (click to expand)", expanded=True):
-                    col_info = build_column_preview(df_preview)
+                st.divider()
+
+                # ══════════════════════════════════════════════════════════
+                # STEP 4 — Preview
+                # ══════════════════════════════════════════════════════════
+                st.markdown("#### Step 4 — Preview")
+
+                with st.expander("Column schema", expanded=True):
+                    col_info = build_column_preview(df_preview, primary_key=preview_pk)
                     st.dataframe(
                         pd.DataFrame(col_info),
                         use_container_width=True,
@@ -565,44 +743,54 @@ with tab_upload:
                 with st.expander("Sample data — first 5 rows"):
                     st.dataframe(df_preview.head(5), use_container_width=True)
 
-                # ── Existing table warning ─────────────────────────────────
+                # Existing table conflict warning
                 if table_name_input.strip():
                     existing = list_existing_tables()
                     if table_name_input.strip() in existing and if_exists == "fail":
                         st.warning(
-                            f"Table **'{table_name_input.strip()}'** already exists in Supabase. "
-                            "Change the table name or switch 'If table already exists' to "
-                            "**Replace** or **Append**."
+                            f"A table named **'{table_name_input.strip()}'** already exists. "
+                            "Change the name or switch to **Replace** or **Append**."
                         )
 
-                # ── Upload button ──────────────────────────────────────────
                 st.divider()
-                upload_btn = st.button("Upload to Supabase", type="primary")
+
+                # ══════════════════════════════════════════════════════════
+                # UPLOAD BUTTON
+                # ══════════════════════════════════════════════════════════
+                upload_btn = st.button("⬆️ Upload to Database", type="primary")
 
                 if upload_btn:
                     tname = table_name_input.strip()
                     if not tname:
                         st.warning("Please enter a table name.")
                     else:
-                        df_to_upload = sanitize_column_names(df_raw.copy()) if sanitize else df_raw.copy()
+                        df_to_upload = (
+                            sanitize_column_names(df_clean.copy()) if sanitize else df_clean.copy()
+                        )
+                        # Remap PK name if column names were sanitized
+                        upload_pk = preview_pk  # already remapped above
 
-                        with st.spinner(f"Uploading {len(df_to_upload):,} rows to Supabase…"):
+                        with st.spinner(f"Uploading {len(df_to_upload):,} rows…"):
                             upload_result = upload_dataframe(
                                 df=df_to_upload,
                                 table_name=tname,
                                 if_exists=if_exists,
+                                primary_key=upload_pk,
                             )
 
                         if upload_result["success"]:
                             st.success(f"✅ {upload_result['message']}")
                             st.balloons()
                             st.info(
-                                f"Switch to the **Query Data** tab to start asking questions "
-                                f"about **{tname}**."
+                                f"Switch to the **Query Data** tab to start asking "
+                                f"questions about **{tname}**."
                             )
                             if st.button(f"Set '{tname}' as active query table"):
                                 save_context({"table_name": tname})
-                                st.success(f"Active table set to '{tname}'. Head to Query Data!")
+                                st.success(
+                                    f"Active table set to **'{tname}'**. "
+                                    "Head to Query Data!"
+                                )
                                 st.rerun()
                         else:
                             st.error(f"❌ Upload failed: {upload_result['message']}")

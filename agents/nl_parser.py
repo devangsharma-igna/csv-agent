@@ -4,7 +4,7 @@ import re
 from utils.llm_client import chat
 
 _SYSTEM_PROMPT = """\
-You are a SQL expert working with a PostgreSQL database (Supabase).
+You are a SQL expert working with a PostgreSQL database.
 You will receive a natural language query and a JSON context object
 describing the target table.
 

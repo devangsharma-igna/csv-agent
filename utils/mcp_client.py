@@ -81,9 +81,8 @@ async def _get_session() -> ClientSession:
     if not os.environ.get("SUPABASE_ACCESS_TOKEN"):
         raise MCPToolError(
             "SUPABASE_ACCESS_TOKEN is not set. "
-            "Generate a Personal Access Token at "
-            "https://supabase.com/dashboard/account/tokens "
-            "and add it to your .env file."
+            "Generate a Personal Access Token in your database dashboard "
+            "under Account → Tokens and add it to your .env file."
         )
 
     server_params = _build_server_params()
