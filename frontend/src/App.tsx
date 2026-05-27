@@ -29,7 +29,7 @@ export default function App() {
         >
           <div>
             <h1 className="text-white text-xl font-bold tracking-tight leading-none">
-              CSV Agent
+              IGNA CSV Agent
             </h1>
             <p className="text-[#76a9fa] text-xs mt-0.5">
               Natural language queries over your data

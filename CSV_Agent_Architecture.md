@@ -6,7 +6,7 @@
 
 ## Contents
 
-1. [What Is CSV Agent?](#1-what-is-csv-agent)
+1. [What Is IGNA CSV Agent?](#1-what-is-csv-agent)
 2. [System Components at a Glance](#2-system-components-at-a-glance)
 3. [First-Time Setup vs Every-Day Use](#3-first-time-setup-vs-every-day-use)
 4. [Full Query Pipeline — Step by Step](#4-full-query-pipeline--step-by-step)
@@ -18,14 +18,14 @@
 
 ---
 
-## 1. What Is CSV Agent?
+## 1. What Is IGNA CSV Agent?
 
-CSV Agent lets a business user ask questions about their data **in plain English** — no SQL knowledge needed. It connects to a database table (originally uploaded from a CSV), understands the structure of the data automatically, and returns answers as readable text, charts, or both.
+IGNA CSV Agent lets a business user ask questions about their data **in plain English** — no SQL knowledge needed. It connects to a database table (originally uploaded from a CSV), understands the structure of the data automatically, and returns answers as readable text, charts, or both.
 
 ```mermaid
 flowchart LR
     USER["👤 Business User\nAsk anything in plain English"]
-    APP["🖥️ CSV Agent\nWeb Application"]
+    APP["🖥️ IGNA CSV Agent\nWeb Application"]
     AI["🤖 AI Model\nAzure OpenAI GPT-4"]
     DB["🗄️ Database\nSupabase"]
     OUT["📊 Answer\nText · Charts · Table"]
@@ -445,4 +445,4 @@ flowchart TB
 
 ---
 
-_CSV Agent · Internal Architecture Documentation_
+_IGNA CSV Agent · Internal Architecture Documentation_

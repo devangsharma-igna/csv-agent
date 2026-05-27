@@ -396,13 +396,18 @@ export function UploadTab({ onRefresh }: UploadTabProps) {
                     columns={colInfoColumns}
                   />
                 </Expander>
-                <Expander title="Sample data — first 5 rows">
+                <Expander title="Sample data — first 5 rows" defaultOpen={true}>
                   <DataTable
                     data={preview.sample_rows}
-                    columns={Object.keys(preview.sample_rows[0] ?? {}).map(k => ({
+                    columns={preview.columns.map(k => ({
                       accessorKey: k,
                       header: k,
-                      cell: (info: { getValue: () => unknown }) => String(info.getValue() ?? ''),
+                      cell: (info: { getValue: () => unknown }) => {
+                        const v = info.getValue();
+                        return v === null || v === undefined
+                          ? <span className="text-[#6e8ea3] italic">null</span>
+                          : String(v);
+                      },
                     }))}
                   />
                 </Expander>

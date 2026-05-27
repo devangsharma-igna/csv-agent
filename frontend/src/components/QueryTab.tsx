@@ -2,12 +2,10 @@ import { useState } from 'react';
 import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
 import { Spinner } from './ui/Spinner';
-import { RadioGroup } from './ui/RadioGroup';
 import { StatusDisplay } from './StatusDisplay';
 import { ResultsDisplay } from './ResultsDisplay';
-import { DebugExpander } from './DebugExpander';
 import { api } from '../api/client';
-import type { AppContext, QueryResult, ResponseFormat } from '../types';
+import type { AppContext, QueryResult } from '../types';
 
 interface QueryTabProps {
   ctx: AppContext | null;
@@ -69,11 +67,9 @@ export function QueryTab({ ctx, onRefresh }: QueryTabProps) {
   const [confirmError, setConfirmError] = useState('');
 
   const [query, setQuery] = useState('');
-  const [responseFormat, setResponseFormat] = useState<ResponseFormat>('NL');
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<Step[] | null>(null);
   const [result, setResult] = useState<QueryResult | null>(null);
-  const [latestCtx, setLatestCtx] = useState<AppContext | null>(null);
 
   const tableName = ctx?.table_name ?? '';
   const contextBuilt = Boolean(ctx?.columns?.length && ctx?.semantic_summary);
@@ -99,12 +95,10 @@ export function QueryTab({ ctx, onRefresh }: QueryTabProps) {
     setResult(null);
     setSteps(buildRunningSteps(tableName, contextBuilt));
 
-    const res = await api.runQuery(query.trim(), responseFormat);
-    const currentCtx = await api.getContext();
+    const res = await api.runQuery(query.trim(), 'NL + Figures');
 
     setSteps(buildDoneSteps(tableName, res));
     setResult(res);
-    setLatestCtx(currentCtx);
     setRunning(false);
 
     if (res.table_gone) {
@@ -159,14 +153,6 @@ export function QueryTab({ ctx, onRefresh }: QueryTabProps) {
           />
         </div>
 
-        <RadioGroup
-          label="Response format"
-          options={['NL', 'Figures', 'NL + Figures']}
-          value={responseFormat}
-          onChange={v => setResponseFormat(v as ResponseFormat)}
-          help="NL — plain-English answer  |  Figures — auto-detected charts  |  NL + Figures — both"
-        />
-
         <Button
           variant="primary"
           onClick={handleRunQuery}
@@ -184,13 +170,10 @@ export function QueryTab({ ctx, onRefresh }: QueryTabProps) {
       {running && <Spinner text="Running pipeline…" />}
 
       {result && !running && (
-        <>
-          <ResultsDisplay
-            result={result}
-            semanticSummary={latestCtx?.semantic_summary ?? ''}
-          />
-          <DebugExpander result={result} ctx={latestCtx} />
-        </>
+        <ResultsDisplay
+          result={result}
+          semanticSummary={ctx?.semantic_summary ?? ''}
+        />
       )}
     </div>
   );

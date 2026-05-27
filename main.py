@@ -338,7 +338,7 @@ with st.sidebar:
                     st.rerun()
 
 # ── Main area ─────────────────────────────────────────────────────────────────
-st.title("CSV Agent")
+st.title("IGNA CSV Agent")
 
 tab_query, tab_upload = st.tabs(["💬 Query Data", "📤 Upload CSV"])
 

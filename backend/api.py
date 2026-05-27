@@ -52,7 +52,7 @@ from agents.executor import execute_query
 
 import pandas as pd
 
-app = FastAPI(title="CSV Agent API")
+app = FastAPI(title="IGNA CSV Agent API")
 
 app.add_middleware(
     CORSMiddleware,

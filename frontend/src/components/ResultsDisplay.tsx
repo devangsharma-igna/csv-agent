@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import ReactMarkdown from 'react-markdown';
 import { Alert } from './ui/Alert';
-import { Expander } from './ui/Expander';
 import { DataTable } from './ui/DataTable';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import type { QueryResult } from '../types';
@@ -105,42 +104,33 @@ export function ResultsDisplay({ result, semanticSummary }: ResultsDisplayProps)
 
   return (
     <div className="space-y-4">
+      {/* 1 — Raw data (always visible, no heading) */}
+      <DataTable data={rows} columns={columns} />
+
+      {/* 2 — NL answer (no heading) */}
       {result.nl_answer && (
-        <div className="rounded-[12px] border border-[#e2e8f0] bg-white p-5 shadow-[0_4px_12px_rgba(26,86,219,0.12)]">
-          <h3 className="mb-3 text-base font-semibold text-[#0f172a]">Answer</h3>
+        <div className="rounded-[12px] border border-[#e2e8f0] bg-white px-5 py-4 shadow-[0_4px_12px_rgba(26,86,219,0.12)]">
           <div className="prose prose-sm max-w-none text-[#475569]">
             <ReactMarkdown>{result.nl_answer}</ReactMarkdown>
           </div>
         </div>
       )}
 
-      {result.figures != null && (
+      {/* 3 — Figures */}
+      {result.figures != null && result.figures.length > 0 && (
         <div className="space-y-4">
-          {result.figures.length > 0 ? (
-            <>
-              <h3 className="text-base font-semibold text-[#0f172a]">Charts</h3>
-              {result.figures.map((figJson, i) => (
-                <ErrorBoundary
-                  key={i}
-                  fallback={<Alert variant="error">Chart {i + 1} failed to render.</Alert>}
-                >
-                  <div className="rounded-[12px] border border-[#e2e8f0] bg-white p-4 shadow-[0_4px_12px_rgba(26,86,219,0.12)]">
-                    <PlotlyChart figJson={figJson} />
-                  </div>
-                </ErrorBoundary>
-              ))}
-            </>
-          ) : (
-            result.nl_answer
-              ? <p className="text-xs text-[#6e8ea3]">No chart could be auto-detected for this result set.</p>
-              : <Alert variant="info">No chart could be auto-detected. Try 'NL' or 'NL + Figures' for a text answer.</Alert>
-          )}
+          {result.figures.map((figJson, i) => (
+            <ErrorBoundary
+              key={i}
+              fallback={<Alert variant="error">Chart {i + 1} failed to render.</Alert>}
+            >
+              <div className="rounded-[12px] border border-[#e2e8f0] bg-white p-4 shadow-[0_4px_12px_rgba(26,86,219,0.12)]">
+                <PlotlyChart figJson={figJson} />
+              </div>
+            </ErrorBoundary>
+          ))}
         </div>
       )}
-
-      <Expander title={`Raw data (${rows.length} rows)`} defaultOpen={false}>
-        <DataTable data={rows} columns={columns} />
-      </Expander>
     </div>
   );
 }
