@@ -27,7 +27,7 @@ flowchart LR
     USER["Business User"]
     APP["IGNA CSV Agent"]
     AI["AI Model - Azure OpenAI"]
-    DB["Database - Supabase"]
+    DB["Database"]
     OUT["Answer - Text and Charts"]
 
     USER -->|"Ask in plain English"| APP
@@ -72,7 +72,7 @@ flowchart TB
 
     subgraph EXTERNAL["External Services"]
         AIAPI["Azure OpenAI GPT-4"]
-        SUPA["Supabase PostgreSQL"]
+        SUPA["PostgreSQL"]
     end
 
     WEBAPP --> CB
@@ -403,7 +403,7 @@ flowchart TB
 
     subgraph EXT["External Services"]
         OPENAI["Azure OpenAI GPT-4"]
-        SUPABASE["Supabase PostgreSQL"]
+        SUPABASE["PostgreSQL"]
     end
 
     WEB --> CB
@@ -423,7 +423,7 @@ flowchart TB
     EXE --> MCP
     EXE --> ROW
     NLR --> LLM
-    MCP --> SUPABASE
+    MCP --> DATABASE
     LLM --> OPENAI
     CTX --> JSON
     JSON --> CTX
