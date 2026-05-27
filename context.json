@@ -1,1 +1,148 @@
-{}
+{
+  "table_name": "tickets",
+  "columns": [
+    {
+      "name": "ticket_id",
+      "type": "text",
+      "nullable": false
+    },
+    {
+      "name": "title",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "category",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "priority",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "status",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "department_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "requested_by",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "assigned_to",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "created_date",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "due_date",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "closed_date",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "is_sensitive",
+      "type": "boolean",
+      "nullable": true
+    }
+  ],
+  "semantic_summary": "The tickets table stores information about support or service requests (tickets) within an organization. Each ticket is uniquely identified by ticket_id. The title and description provide a brief and detailed explanation of the issue or request. The category field classifies the type of ticket (such as Software, Access, Email, etc.), while priority indicates its urgency (e.g., Low, High, Critical). Status tracks the current state of the ticket (such as Closed or Waiting). department_id links the ticket to a specific department, and requested_by and assigned_to reference the users who created and are responsible for the ticket, respectively. created_date, due_date, and closed_date record when the ticket was opened, when it is due, and when it was closed. The is_sensitive boolean indicates whether the ticket contains sensitive information. This table is used to manage and track the lifecycle and handling of support or service requests.",
+  "sample_rows": [
+    {
+      "ticket_id": "010df5dd-132e-4287-b68f-710985d77159",
+      "title": "Ticket #4: Software - Critical",
+      "description": "Request from Nisha Rao. Category: Software. Priority: Critical. Status: Closed.",
+      "category": "Software",
+      "priority": "Low",
+      "status": "Closed",
+      "department_id": "61c490fb-66bf-4e25-88bd-accd1fb8e9fe",
+      "requested_by": "3ab61d5d-a683-4752-8574-a97cb6455f0b",
+      "assigned_to": "8ad8eb10-864b-433a-a545-15c748b2c826",
+      "created_date": "2026-05-17 05:06:44.562137",
+      "due_date": "2026-05-18 14:06:44.562137",
+      "closed_date": "2026-05-21 09:06:44.562137",
+      "is_sensitive": false
+    },
+    {
+      "ticket_id": "02c6c9fb-e362-4318-954f-a90a6e90d5db",
+      "title": "Ticket #27: Access - High",
+      "description": "Request from Arjun Patel. Category: Access. Priority: High. Status: Waiting.",
+      "category": "Access",
+      "priority": "High",
+      "status": "Waiting",
+      "department_id": "c83b8dd5-a23f-4d62-8926-0b133b222633",
+      "requested_by": "7b7f521b-bfe1-4d69-9363-bb70da2a6e96",
+      "assigned_to": "83fadabf-1f5a-4c2f-bbb1-69c9c5d43290",
+      "created_date": "2026-05-07 06:06:44.562137",
+      "due_date": "2026-05-19 13:06:44.562137",
+      "closed_date": null,
+      "is_sensitive": false
+    },
+    {
+      "ticket_id": "047a4de4-f367-4cc3-bc95-e39e8c23846a",
+      "title": "Ticket #79: Application Support - High",
+      "description": "Request from Nisha Rao. Category: Application Support. Priority: High. Status: Waiting.",
+      "category": "Application Support",
+      "priority": "High",
+      "status": "Waiting",
+      "department_id": "61c490fb-66bf-4e25-88bd-accd1fb8e9fe",
+      "requested_by": "3ab61d5d-a683-4752-8574-a97cb6455f0b",
+      "assigned_to": "8ad8eb10-864b-433a-a545-15c748b2c826",
+      "created_date": "2026-03-16 02:06:44.562137",
+      "due_date": "2026-05-21 17:06:44.562137",
+      "closed_date": null,
+      "is_sensitive": false
+    },
+    {
+      "ticket_id": "053ff978-2468-4a1e-9221-73076de265d7",
+      "title": "Ticket #11: Password / Access - High",
+      "description": "Request from Aarav Mehta. Category: Password / Access. Priority: High. Status: Waiting.",
+      "category": "Password / Access",
+      "priority": "High",
+      "status": "Closed",
+      "department_id": "04c32dce-34ff-4143-95d0-ce9f696db0e2",
+      "requested_by": "6b1301a4-a163-4d24-aa2e-f4602593bd2d",
+      "assigned_to": "20bd1c54-a932-4344-be51-ec6a529d731a",
+      "created_date": "2026-05-14 22:06:44.562137",
+      "due_date": "2026-05-18 21:06:44.562137",
+      "closed_date": null,
+      "is_sensitive": false
+    },
+    {
+      "ticket_id": "0629df02-fcbe-4610-9350-24fccb343528",
+      "title": "Ticket #140: Email - Critical",
+      "description": "Request from Ritika Sen. Category: Email. Priority: Critical. Status: Closed.",
+      "category": "Email",
+      "priority": "Critical",
+      "status": "Closed",
+      "department_id": "82295c94-5aac-4dc2-917d-eb77669181a0",
+      "requested_by": "495fc8bd-1eee-4f24-9293-d1693d6ebd46",
+      "assigned_to": null,
+      "created_date": "2025-11-01 13:06:44.562137",
+      "due_date": "2026-05-16 13:06:44.562137",
+      "closed_date": "2025-11-02 21:06:44.562137",
+      "is_sensitive": true
+    }
+  ]
+}
