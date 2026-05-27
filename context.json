@@ -1,148 +1,478 @@
 {
-  "table_name": "tickets",
+  "table_name": "testfile1",
   "columns": [
     {
-      "name": "ticket_id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "name": "title",
+      "name": "medalist_wikidata_id",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "description",
+      "name": "medalist_link",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "category",
+      "name": "medalist_name",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "priority",
+      "name": "medal",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "status",
+      "name": "delegation_wikidata_id",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "department_id",
+      "name": "delegation_link",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "requested_by",
+      "name": "delegation_name",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "assigned_to",
+      "name": "country_medal_wikidata_id",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "created_date",
+      "name": "country_medal",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "due_date",
+      "name": "country_medal_code2",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "closed_date",
+      "name": "country_medal_code3",
       "type": "text",
       "nullable": true
     },
     {
-      "name": "is_sensitive",
-      "type": "boolean",
+      "name": "country_medal_ioc_country_code",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "country_medal_nuts_code",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "date_of_birth",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_located_in_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_located_in",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "place_of_birth_coordinates",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "lat",
+      "type": "double precision",
+      "nullable": true
+    },
+    {
+      "name": "lon",
+      "type": "double precision",
+      "nullable": true
+    },
+    {
+      "name": "sex_or_gender_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "sex_or_gender",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_link",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_sport_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_sport",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of_sport_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "event_part_of_sport",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "sport_wikidata_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "sport",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts1_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts1_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_name",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_population",
+      "type": "double precision",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_population",
+      "type": "double precision",
+      "nullable": true
+    },
+    {
+      "name": "nuts2_gdp",
+      "type": "double precision",
+      "nullable": true
+    },
+    {
+      "name": "nuts3_gdp",
+      "type": "double precision",
+      "nullable": true
+    },
+    {
+      "name": "nuts0_id",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "name": "nuts0_name",
+      "type": "text",
       "nullable": true
     }
   ],
-  "semantic_summary": "The tickets table stores information about support or service requests (tickets) within an organization. Each ticket is uniquely identified by ticket_id. The title and description provide a brief and detailed explanation of the issue or request. The category field classifies the type of ticket (such as Software, Access, Email, etc.), while priority indicates its urgency (e.g., Low, High, Critical). Status tracks the current state of the ticket (such as Closed or Waiting). department_id links the ticket to a specific department, and requested_by and assigned_to reference the users who created and are responsible for the ticket, respectively. created_date, due_date, and closed_date record when the ticket was opened, when it is due, and when it was closed. The is_sensitive boolean indicates whether the ticket contains sensitive information. This table is used to manage and track the lifecycle and handling of support or service requests.",
+  "semantic_summary": "This table contains detailed records of Olympic medalists, including their Wikidata IDs, Wikipedia links, names, medals won, and associated delegations. It captures the country each medal is attributed to, with various country codes (ISO2, ISO3, IOC), and links to Wikidata for countries and delegations. The table records the athlete's date and place of birth, with both textual and Wikidata references, as well as geographic coordinates (latitude and longitude). It includes information about the athlete's gender (with Wikidata ID and label), the event in which the medal was won (with Wikidata ID, Wikipedia link, and event name), and the broader event or sport context. There are also fields for NUTS regional codes and names (NUTS0, NUTS1, NUTS2, NUTS3), as well as population and GDP data for NUTS2 and NUTS3 regions, which are primarily relevant for European athletes. This structure supports complex queries about medalists, their demographics, the events they participated in, and the geographic and economic context of their origins.",
   "sample_rows": [
     {
-      "ticket_id": "010df5dd-132e-4287-b68f-710985d77159",
-      "title": "Ticket #4: Software - Critical",
-      "description": "Request from Nisha Rao. Category: Software. Priority: Critical. Status: Closed.",
-      "category": "Software",
-      "priority": "Low",
-      "status": "Closed",
-      "department_id": "61c490fb-66bf-4e25-88bd-accd1fb8e9fe",
-      "requested_by": "3ab61d5d-a683-4752-8574-a97cb6455f0b",
-      "assigned_to": "8ad8eb10-864b-433a-a545-15c748b2c826",
-      "created_date": "2026-05-17 05:06:44.562137",
-      "due_date": "2026-05-18 14:06:44.562137",
-      "closed_date": "2026-05-21 09:06:44.562137",
-      "is_sensitive": false
+      "medalist_wikidata_id": "Q11739253",
+      "medalist_link": "https://en.wikipedia.org/wiki/Kim_Woo-jin_(archer)",
+      "medalist_name": "Kim Woo-jin",
+      "medal": "gold",
+      "delegation_wikidata_id": "Q114753595",
+      "delegation_link": "https://en.wikipedia.org/wiki/South_Korea_at_the_2024_Summer_Olympics",
+      "delegation_name": "South Korea at the 2024 Summer Olympics",
+      "country_medal_wikidata_id": "Q884",
+      "country_medal": "South Korea",
+      "country_medal_code2": "KR",
+      "country_medal_code3": "KOR",
+      "country_medal_ioc_country_code": "KOR",
+      "country_medal_nuts_code": null,
+      "date_of_birth": "1992-06-20",
+      "place_of_birth_wikidata_id": "Q50309",
+      "place_of_birth": "Okcheon County",
+      "place_of_birth_located_in_wikidata_id": "Q41066",
+      "place_of_birth_located_in": "North Chungcheong",
+      "place_of_birth_coordinates": "36.300833333333,127.56861111111",
+      "lat": 36.300833333333,
+      "lon": 127.56861111111,
+      "sex_or_gender_wikidata_id": "Q6581097",
+      "sex_or_gender": "male",
+      "event_wikidata_id": "Q117156626",
+      "event_link": "https://en.wikipedia.org/wiki/Archery_at_the_2024_Summer_Olympics_%E2%80%93_Men%27s_individual",
+      "event_name": "Archery at the 2024 Summer Olympics \u2013 Men's individual",
+      "event_part_of_wikidata_id": "Q109317238",
+      "event_part_of": "archery at the 2024 Summer Olympics",
+      "event_sport_wikidata_id": "Q108429",
+      "event_sport": "archery",
+      "event_part_of_sport_wikidata_id": "Q108429",
+      "event_part_of_sport": "archery",
+      "sport_wikidata_id": "Q108429",
+      "sport": "archery",
+      "nuts1_id": null,
+      "nuts1_name": null,
+      "nuts2_id": null,
+      "nuts2_name": null,
+      "nuts3_id": null,
+      "nuts3_name": null,
+      "nuts2_population": null,
+      "nuts3_population": null,
+      "nuts2_gdp": null,
+      "nuts3_gdp": null,
+      "nuts0_id": null,
+      "nuts0_name": null
     },
     {
-      "ticket_id": "02c6c9fb-e362-4318-954f-a90a6e90d5db",
-      "title": "Ticket #27: Access - High",
-      "description": "Request from Arjun Patel. Category: Access. Priority: High. Status: Waiting.",
-      "category": "Access",
-      "priority": "High",
-      "status": "Waiting",
-      "department_id": "c83b8dd5-a23f-4d62-8926-0b133b222633",
-      "requested_by": "7b7f521b-bfe1-4d69-9363-bb70da2a6e96",
-      "assigned_to": "83fadabf-1f5a-4c2f-bbb1-69c9c5d43290",
-      "created_date": "2026-05-07 06:06:44.562137",
-      "due_date": "2026-05-19 13:06:44.562137",
-      "closed_date": null,
-      "is_sensitive": false
+      "medalist_wikidata_id": "Q1156472",
+      "medalist_link": "https://en.wikipedia.org/wiki/Brady_Ellison",
+      "medalist_name": "Brady Ellison",
+      "medal": "silver",
+      "delegation_wikidata_id": "Q113581713",
+      "delegation_link": "https://en.wikipedia.org/wiki/United_States_at_the_2024_Summer_Olympics",
+      "delegation_name": "United States at the 2024 Summer Olympics",
+      "country_medal_wikidata_id": "Q30",
+      "country_medal": "United States of America",
+      "country_medal_code2": "US",
+      "country_medal_code3": "USA",
+      "country_medal_ioc_country_code": "USA",
+      "country_medal_nuts_code": null,
+      "date_of_birth": "1988-10-27",
+      "place_of_birth_wikidata_id": "Q51682",
+      "place_of_birth": "Glendale",
+      "place_of_birth_located_in_wikidata_id": "Q58691",
+      "place_of_birth_located_in": "Maricopa County",
+      "place_of_birth_coordinates": "33.583333333333,-112.2",
+      "lat": 33.583333333333,
+      "lon": -112.2,
+      "sex_or_gender_wikidata_id": "Q6581097",
+      "sex_or_gender": "male",
+      "event_wikidata_id": "Q117156626",
+      "event_link": "https://en.wikipedia.org/wiki/Archery_at_the_2024_Summer_Olympics_%E2%80%93_Men%27s_individual",
+      "event_name": "Archery at the 2024 Summer Olympics \u2013 Men's individual",
+      "event_part_of_wikidata_id": "Q109317238",
+      "event_part_of": "archery at the 2024 Summer Olympics",
+      "event_sport_wikidata_id": "Q108429",
+      "event_sport": "archery",
+      "event_part_of_sport_wikidata_id": "Q108429",
+      "event_part_of_sport": "archery",
+      "sport_wikidata_id": "Q108429",
+      "sport": "archery",
+      "nuts1_id": null,
+      "nuts1_name": null,
+      "nuts2_id": null,
+      "nuts2_name": null,
+      "nuts3_id": null,
+      "nuts3_name": null,
+      "nuts2_population": null,
+      "nuts3_population": null,
+      "nuts2_gdp": null,
+      "nuts3_gdp": null,
+      "nuts0_id": null,
+      "nuts0_name": null
     },
     {
-      "ticket_id": "047a4de4-f367-4cc3-bc95-e39e8c23846a",
-      "title": "Ticket #79: Application Support - High",
-      "description": "Request from Nisha Rao. Category: Application Support. Priority: High. Status: Waiting.",
-      "category": "Application Support",
-      "priority": "High",
-      "status": "Waiting",
-      "department_id": "61c490fb-66bf-4e25-88bd-accd1fb8e9fe",
-      "requested_by": "3ab61d5d-a683-4752-8574-a97cb6455f0b",
-      "assigned_to": "8ad8eb10-864b-433a-a545-15c748b2c826",
-      "created_date": "2026-03-16 02:06:44.562137",
-      "due_date": "2026-05-21 17:06:44.562137",
-      "closed_date": null,
-      "is_sensitive": false
+      "medalist_wikidata_id": "Q18001487",
+      "medalist_link": "https://en.wikipedia.org/wiki/Lee_Woo-seok",
+      "medalist_name": "Lee Woo-seok",
+      "medal": "bronze",
+      "delegation_wikidata_id": "Q114753595",
+      "delegation_link": "https://en.wikipedia.org/wiki/South_Korea_at_the_2024_Summer_Olympics",
+      "delegation_name": "South Korea at the 2024 Summer Olympics",
+      "country_medal_wikidata_id": "Q884",
+      "country_medal": "South Korea",
+      "country_medal_code2": "KR",
+      "country_medal_code3": "KOR",
+      "country_medal_ioc_country_code": "KOR",
+      "country_medal_nuts_code": null,
+      "date_of_birth": "1997-08-07",
+      "place_of_birth_wikidata_id": "Q20934",
+      "place_of_birth": "Incheon",
+      "place_of_birth_located_in_wikidata_id": "Q884",
+      "place_of_birth_located_in": "South Korea",
+      "place_of_birth_coordinates": "37.463888888889,126.64861111111",
+      "lat": 37.463888888889,
+      "lon": 126.64861111111,
+      "sex_or_gender_wikidata_id": "Q6581097",
+      "sex_or_gender": "male",
+      "event_wikidata_id": "Q117156626",
+      "event_link": "https://en.wikipedia.org/wiki/Archery_at_the_2024_Summer_Olympics_%E2%80%93_Men%27s_individual",
+      "event_name": "Archery at the 2024 Summer Olympics \u2013 Men's individual",
+      "event_part_of_wikidata_id": "Q109317238",
+      "event_part_of": "archery at the 2024 Summer Olympics",
+      "event_sport_wikidata_id": "Q108429",
+      "event_sport": "archery",
+      "event_part_of_sport_wikidata_id": "Q108429",
+      "event_part_of_sport": "archery",
+      "sport_wikidata_id": "Q108429",
+      "sport": "archery",
+      "nuts1_id": null,
+      "nuts1_name": null,
+      "nuts2_id": null,
+      "nuts2_name": null,
+      "nuts3_id": null,
+      "nuts3_name": null,
+      "nuts2_population": null,
+      "nuts3_population": null,
+      "nuts2_gdp": null,
+      "nuts3_gdp": null,
+      "nuts0_id": null,
+      "nuts0_name": null
     },
     {
-      "ticket_id": "053ff978-2468-4a1e-9221-73076de265d7",
-      "title": "Ticket #11: Password / Access - High",
-      "description": "Request from Aarav Mehta. Category: Password / Access. Priority: High. Status: Waiting.",
-      "category": "Password / Access",
-      "priority": "High",
-      "status": "Closed",
-      "department_id": "04c32dce-34ff-4143-95d0-ce9f696db0e2",
-      "requested_by": "6b1301a4-a163-4d24-aa2e-f4602593bd2d",
-      "assigned_to": "20bd1c54-a932-4344-be51-ec6a529d731a",
-      "created_date": "2026-05-14 22:06:44.562137",
-      "due_date": "2026-05-18 21:06:44.562137",
-      "closed_date": null,
-      "is_sensitive": false
+      "medalist_wikidata_id": "Q107619893",
+      "medalist_link": "https://en.wikipedia.org/wiki/Kim_Je-deok",
+      "medalist_name": "Kim Je-deok",
+      "medal": "gold",
+      "delegation_wikidata_id": "Q114753595",
+      "delegation_link": "https://en.wikipedia.org/wiki/South_Korea_at_the_2024_Summer_Olympics",
+      "delegation_name": "South Korea at the 2024 Summer Olympics",
+      "country_medal_wikidata_id": "Q884",
+      "country_medal": "South Korea",
+      "country_medal_code2": "KR",
+      "country_medal_code3": "KOR",
+      "country_medal_ioc_country_code": "KOR",
+      "country_medal_nuts_code": null,
+      "date_of_birth": "2004-04-12",
+      "place_of_birth_wikidata_id": "Q41154",
+      "place_of_birth": "North Gyeongsang",
+      "place_of_birth_located_in_wikidata_id": "Q884",
+      "place_of_birth_located_in": "South Korea",
+      "place_of_birth_coordinates": "36.25,128.75",
+      "lat": 36.25,
+      "lon": 128.75,
+      "sex_or_gender_wikidata_id": "Q6581097",
+      "sex_or_gender": "male",
+      "event_wikidata_id": "Q117156627",
+      "event_link": "https://en.wikipedia.org/wiki/Archery_at_the_2024_Summer_Olympics_%E2%80%93_Men%27s_team",
+      "event_name": "Archery at the 2024 Summer Olympics \u2013 Men's team",
+      "event_part_of_wikidata_id": "Q109317238",
+      "event_part_of": "archery at the 2024 Summer Olympics",
+      "event_sport_wikidata_id": null,
+      "event_sport": null,
+      "event_part_of_sport_wikidata_id": "Q108429",
+      "event_part_of_sport": "archery",
+      "sport_wikidata_id": "Q108429",
+      "sport": "archery",
+      "nuts1_id": null,
+      "nuts1_name": null,
+      "nuts2_id": null,
+      "nuts2_name": null,
+      "nuts3_id": null,
+      "nuts3_name": null,
+      "nuts2_population": null,
+      "nuts3_population": null,
+      "nuts2_gdp": null,
+      "nuts3_gdp": null,
+      "nuts0_id": null,
+      "nuts0_name": null
     },
     {
-      "ticket_id": "0629df02-fcbe-4610-9350-24fccb343528",
-      "title": "Ticket #140: Email - Critical",
-      "description": "Request from Ritika Sen. Category: Email. Priority: Critical. Status: Closed.",
-      "category": "Email",
-      "priority": "Critical",
-      "status": "Closed",
-      "department_id": "82295c94-5aac-4dc2-917d-eb77669181a0",
-      "requested_by": "495fc8bd-1eee-4f24-9293-d1693d6ebd46",
-      "assigned_to": null,
-      "created_date": "2025-11-01 13:06:44.562137",
-      "due_date": "2026-05-16 13:06:44.562137",
-      "closed_date": "2025-11-02 21:06:44.562137",
-      "is_sensitive": true
+      "medalist_wikidata_id": "Q11739253",
+      "medalist_link": "https://en.wikipedia.org/wiki/Kim_Woo-jin_(archer)",
+      "medalist_name": "Kim Woo-jin",
+      "medal": "gold",
+      "delegation_wikidata_id": "Q114753595",
+      "delegation_link": "https://en.wikipedia.org/wiki/South_Korea_at_the_2024_Summer_Olympics",
+      "delegation_name": "South Korea at the 2024 Summer Olympics",
+      "country_medal_wikidata_id": "Q884",
+      "country_medal": "South Korea",
+      "country_medal_code2": "KR",
+      "country_medal_code3": "KOR",
+      "country_medal_ioc_country_code": "KOR",
+      "country_medal_nuts_code": null,
+      "date_of_birth": "1992-06-20",
+      "place_of_birth_wikidata_id": "Q50309",
+      "place_of_birth": "Okcheon County",
+      "place_of_birth_located_in_wikidata_id": "Q41066",
+      "place_of_birth_located_in": "North Chungcheong",
+      "place_of_birth_coordinates": "36.300833333333,127.56861111111",
+      "lat": 36.300833333333,
+      "lon": 127.56861111111,
+      "sex_or_gender_wikidata_id": "Q6581097",
+      "sex_or_gender": "male",
+      "event_wikidata_id": "Q117156627",
+      "event_link": "https://en.wikipedia.org/wiki/Archery_at_the_2024_Summer_Olympics_%E2%80%93_Men%27s_team",
+      "event_name": "Archery at the 2024 Summer Olympics \u2013 Men's team",
+      "event_part_of_wikidata_id": "Q109317238",
+      "event_part_of": "archery at the 2024 Summer Olympics",
+      "event_sport_wikidata_id": null,
+      "event_sport": null,
+      "event_part_of_sport_wikidata_id": "Q108429",
+      "event_part_of_sport": "archery",
+      "sport_wikidata_id": "Q108429",
+      "sport": "archery",
+      "nuts1_id": null,
+      "nuts1_name": null,
+      "nuts2_id": null,
+      "nuts2_name": null,
+      "nuts3_id": null,
+      "nuts3_name": null,
+      "nuts2_population": null,
+      "nuts3_population": null,
+      "nuts2_gdp": null,
+      "nuts3_gdp": null,
+      "nuts0_id": null,
+      "nuts0_name": null
     }
   ]
 }

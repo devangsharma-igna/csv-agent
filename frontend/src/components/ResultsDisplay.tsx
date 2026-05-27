@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import Plotly from 'plotly.js-dist-min';
 import ReactMarkdown from 'react-markdown';
 import { Alert } from './ui/Alert';
 import { Expander } from './ui/Expander';
@@ -6,10 +7,6 @@ import { DataTable } from './ui/DataTable';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import type { QueryResult } from '../types';
 import type { ColumnDef } from '@tanstack/react-table';
-
-// Static import — avoids CJS interop issues with dynamic import()
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const Plotly = require('plotly.js') as typeof import('plotly.js');
 
 function PlotlyChart({ figJson }: { figJson: string }) {
   const divRef = useRef<HTMLDivElement>(null);
@@ -42,8 +39,6 @@ function PlotlyChart({ figJson }: { figJson: string }) {
         },
         { responsive: true, displayModeBar: false },
       );
-      // Trigger autosize after Plotly initialises
-      window.dispatchEvent(new Event('resize'));
     } catch (e) {
       setError(String(e));
     }
@@ -53,12 +48,7 @@ function PlotlyChart({ figJson }: { figJson: string }) {
 
   if (error) return <Alert variant="error">{error}</Alert>;
 
-  return (
-    <div
-      ref={divRef}
-      style={{ width: '100%', minHeight: 320 }}
-    />
-  );
+  return <div ref={divRef} style={{ width: '100%', minHeight: 320 }} />;
 }
 
 interface ResultsDisplayProps {
