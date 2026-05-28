@@ -1,0 +1,303 @@
+"""Common scaffolding for all agents.
+
+- Azure OpenAI GPT-4.1 client (shared singleton).
+- Persona/few-shot prompt loader (markdown files in app/prompts/).
+- ReAct loop that lets the LLM call MCP-backed tools (execute_sql, list_tables)
+  with a strict iteration cap.
+- TableExistenceGate: re-checks table existence at every agent entry AND after
+  every MCP tool observation. Trips a TableDeletedError on first miss.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+from openai import AsyncAzureOpenAI
+
+from ..config import settings
+from ..logging_utils import trunc
+from ..mcp_client import MCPToolError, mcp
+
+log = logging.getLogger("igna.agent")
+gate_log = logging.getLogger("igna.gate")
+llm_log = logging.getLogger("igna.llm")
+
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+
+_client: AsyncAzureOpenAI | None = None
+
+
+def get_llm() -> AsyncAzureOpenAI:
+    global _client
+    if _client is None:
+        _client = AsyncAzureOpenAI(
+            azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+            api_key=settings.AZURE_OPENAI_API_KEY,
+            api_version=settings.AZURE_OPENAI_API_VERSION,
+        )
+    return _client
+
+
+def load_prompt(name: str) -> str:
+    p = _PROMPTS_DIR / f"{name}.md"
+    return p.read_text(encoding="utf-8")
+
+
+class TableDeletedError(Exception):
+    """Raised by TableExistenceGate when the target table no longer exists.
+
+    Carries the phase (agent name) that observed the disappearance — surfaced
+    in the HTTP 410 response so the FE can show *which* gate tripped.
+    """
+
+    def __init__(self, table: str, phase: str) -> None:
+        super().__init__(f"Table '{table}' no longer exists (phase: {phase})")
+        self.table = table
+        self.phase = phase
+
+
+class TableExistenceGate:
+    """Hard circuit breaker. Cheap enough to call at every boundary."""
+
+    def __init__(self, table: str, phase: str) -> None:
+        self.table = table
+        self.phase = phase
+
+    async def check(self) -> None:
+        exists = await mcp.table_exists(self.table)
+        if not exists:
+            gate_log.warning("gate TRIPPED | phase=%s table=%s → HTTP 410", self.phase, self.table)
+            raise TableDeletedError(self.table, self.phase)
+        gate_log.debug("gate ok | phase=%s table=%s", self.phase, self.table)
+
+
+# --- ReAct loop -------------------------------------------------------------
+
+Tool = dict[str, Any]
+ToolImpl = Callable[[dict[str, Any]], Awaitable[Any]]
+
+
+def supabase_select_tool() -> tuple[Tool, ToolImpl]:
+    """Read-only execute_sql tool exposed to agents that need to inspect data."""
+
+    spec = {
+        "type": "function",
+        "function": {
+            "name": "execute_sql",
+            "description": (
+                "Execute a single read-only PostgreSQL SELECT against the user's Supabase. "
+                "No DDL, no INSERT/UPDATE/DELETE. Returns the rows as JSON."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    }
+
+    async def impl(args: dict[str, Any]) -> Any:
+        q = args["query"].strip().rstrip(";")
+        upper = q.upper()
+        for forbidden in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ", "TRUNCATE "):
+            if forbidden in upper + " ":
+                log.warning("agent tried forbidden statement: %s | sql=%s", forbidden.strip(), trunc(q, 300))
+                raise MCPToolError("execute_sql", f"forbidden statement: {forbidden.strip()}")
+        log.info("agent SQL → %s", trunc(q, 400))
+        return await mcp.execute_sql(q)
+
+    return spec, impl
+
+
+def list_tables_tool() -> tuple[Tool, ToolImpl]:
+    spec = {
+        "type": "function",
+        "function": {
+            "name": "list_tables",
+            "description": "List tables in the public schema of the user's Supabase.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    async def impl(_: dict[str, Any]) -> Any:
+        return await mcp.list_tables(["public"])
+
+    return spec, impl
+
+
+async def react_loop(
+    *,
+    system: str,
+    user: str,
+    tools: list[tuple[Tool, ToolImpl]],
+    gate: TableExistenceGate | None,
+    response_format: dict | None = None,
+    max_iter: int | None = None,
+    observations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Run a ReAct loop. Returns the final JSON object the LLM produced.
+
+    - On every tool observation, re-runs the existence gate (if provided).
+    - Enforces max_iter (default from settings.MAX_REACT_ITERATIONS).
+    - Final assistant message MUST be valid JSON.
+    - If `observations` is provided, each successful tool call appends
+      `{tool, args, result}` to it — callers (e.g. SQL Agent) use this to
+      avoid asking the LLM to echo bulky tool results in its final JSON.
+    """
+
+    llm = get_llm()
+    tool_specs = [t[0] for t in tools]
+    tool_impls = {t[0]["function"]["name"]: t[1] for t in tools}
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    limit = max_iter or settings.MAX_REACT_ITERATIONS
+    phase = gate.phase if gate else "?"
+    llm_log.info(
+        "ReAct start | phase=%s tools=%s max_iter=%d user=%s",
+        phase, [s["function"]["name"] for s in tool_specs], limit, trunc(user, 250),
+    )
+
+    for step in range(limit):
+        kwargs: dict[str, Any] = {
+            "model": settings.AZURE_OPENAI_DEPLOYMENT,
+            "messages": messages,
+            "temperature": 0.1,
+        }
+        if tool_specs:
+            kwargs["tools"] = tool_specs
+            kwargs["tool_choice"] = "auto"
+        if response_format and not tool_specs:
+            kwargs["response_format"] = response_format
+
+        t0 = time.perf_counter()
+        resp = await llm.chat.completions.create(**kwargs)
+        dt = (time.perf_counter() - t0) * 1000
+        msg = resp.choices[0].message
+        usage = getattr(resp, "usage", None)
+        llm_log.info(
+            "LLM ↩ %s step=%d (%.0fms) | tokens=p%s/c%s tool_calls=%d",
+            phase, step + 1, dt,
+            getattr(usage, "prompt_tokens", "?") if usage else "?",
+            getattr(usage, "completion_tokens", "?") if usage else "?",
+            len(msg.tool_calls or []),
+        )
+
+        if msg.tool_calls:
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+            for tc in msg.tool_calls:
+                name = tc.function.name
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                llm_log.info("LLM → tool %s | phase=%s args=%s", name, phase, trunc(args, 300))
+                impl = tool_impls.get(name)
+                if impl is None:
+                    observation = {"error": f"unknown tool: {name}"}
+                    llm_log.warning("LLM unknown tool: %s", name)
+                else:
+                    try:
+                        observation = await impl(args)
+                        if observations is not None:
+                            observations.append({"tool": name, "args": args, "result": observation})
+                    except MCPToolError as e:
+                        observation = {"error": e.message}
+                        llm_log.warning("tool %s failed | %s", name, trunc(e.message, 300))
+                        # If the error is a "relation does not exist", the gate
+                        # will catch it on the next check — short-circuit early.
+                        if gate and ("does not exist" in e.message.lower()
+                                     or "undefined_table" in e.message.lower()):
+                            await gate.check()  # raises TableDeletedError
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(observation, default=str)[:8000],
+                })
+                if gate is not None:
+                    await gate.check()
+            continue
+
+        # No tool call → assistant produced the final answer.
+        content = msg.content or "{}"
+        cleaned = _strip_code_fence(content)
+        try:
+            result = json.loads(cleaned)
+            llm_log.info("ReAct done | phase=%s steps=%d | result=%s", phase, step + 1, trunc(result, 400))
+            return result
+        except json.JSONDecodeError:
+            llm_log.warning("LLM returned non-JSON, asking once more | phase=%s preview=%s", phase, trunc(content, 200))
+            # Ask once for valid JSON, then give up.
+            messages.append({"role": "assistant", "content": content})
+            messages.append({
+                "role": "user",
+                "content": "Reply ONLY with the final JSON object as specified. No prose.",
+            })
+            resp2 = await llm.chat.completions.create(
+                model=settings.AZURE_OPENAI_DEPLOYMENT,
+                messages=messages,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            return json.loads(resp2.choices[0].message.content or "{}")
+
+    raise RuntimeError(f"ReAct iteration cap ({limit}) exceeded")
+
+
+def _strip_code_fence(s: str) -> str:
+    """Models sometimes wrap JSON in ```json ... ``` despite instructions."""
+    s = s.strip()
+    if s.startswith("```"):
+        # drop opening fence (optionally ```json)
+        nl = s.find("\n")
+        if nl != -1:
+            s = s[nl + 1 :]
+        else:
+            s = s.lstrip("`").lstrip("json").lstrip()
+        if s.endswith("```"):
+            s = s[:-3].rstrip()
+    return s
+
+
+async def single_shot_json(*, system: str, user: str, phase: str = "?") -> dict[str, Any]:
+    """Non-ReAct JSON-mode call. Used by NL Parser + NL Responder."""
+    llm = get_llm()
+    llm_log.info("LLM ↪ single-shot | phase=%s user=%s", phase, trunc(user, 250))
+    t0 = time.perf_counter()
+    resp = await llm.chat.completions.create(
+        model=settings.AZURE_OPENAI_DEPLOYMENT,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+    dt = (time.perf_counter() - t0) * 1000
+    usage = getattr(resp, "usage", None)
+    result = json.loads(resp.choices[0].message.content or "{}")
+    llm_log.info(
+        "LLM ↩ single-shot | phase=%s (%.0fms) tokens=p%s/c%s result=%s",
+        phase, dt,
+        getattr(usage, "prompt_tokens", "?") if usage else "?",
+        getattr(usage, "completion_tokens", "?") if usage else "?",
+        trunc(result, 400),
+    )
+    return result
