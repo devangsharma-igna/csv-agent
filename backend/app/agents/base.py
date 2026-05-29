@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -25,6 +26,19 @@ from ..mcp_client import MCPToolError, mcp
 log = logging.getLogger("igna.agent")
 gate_log = logging.getLogger("igna.gate")
 llm_log = logging.getLogger("igna.llm")
+
+# Per-request gate cache — holds {table: exists_bool} for the lifetime of a
+# single query request. Entry-boundary gates read from this so they never hit
+# MCP more than once per request; in-loop gates always bypass it for safety.
+_request_gate_cache: ContextVar[dict[str, bool] | None] = ContextVar(
+    "_request_gate_cache", default=None
+)
+
+
+def init_gate_cache() -> None:
+    """Call exactly once at the top of each query request handler."""
+    _request_gate_cache.set({})
+
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
@@ -62,16 +76,54 @@ class TableDeletedError(Exception):
 
 
 class TableExistenceGate:
-    """Hard circuit breaker. Cheap enough to call at every boundary."""
+    """Hard circuit breaker.
 
-    def __init__(self, table: str, phase: str) -> None:
+    Two modes, controlled by ``in_loop``:
+
+    * ``in_loop=False`` (default) — used at entry boundaries in the
+      orchestrator. Checks the per-request cache first; only hits MCP when
+      the table has not been checked yet this request. Saves 4+ MCP round-trips
+      per query (each ~700–1 100 ms) with no safety trade-off because the
+      in-loop gate is the actual deletion detector.
+
+    * ``in_loop=True`` — used inside ReAct loops after every MCP observation.
+      Always issues a fresh ``table_exists`` call so a deletion is caught
+      within one observation round-trip. Also updates the cache so a subsequent
+      boundary check sees the accurate state.
+    """
+
+    def __init__(self, table: str, phase: str, *, in_loop: bool = False) -> None:
         self.table = table
         self.phase = phase
+        self.in_loop = in_loop
 
     async def check(self) -> None:
+        cache = _request_gate_cache.get()
+
+        if not self.in_loop and cache is not None and self.table in cache:
+            # Cache hit — boundary check, result already known this request.
+            exists = cache[self.table]
+            if not exists:
+                gate_log.warning(
+                    "gate TRIPPED (cached) | phase=%s table=%s → HTTP 410",
+                    self.phase, self.table,
+                )
+                raise TableDeletedError(self.table, self.phase)
+            gate_log.debug("gate ok (cached) | phase=%s table=%s", self.phase, self.table)
+            return
+
+        # Fresh MCP check (either in_loop=True or cache miss for this table).
         exists = await mcp.table_exists(self.table)
+
+        # Always update cache so subsequent boundary checks stay accurate.
+        if cache is not None:
+            cache[self.table] = exists
+
         if not exists:
-            gate_log.warning("gate TRIPPED | phase=%s table=%s → HTTP 410", self.phase, self.table)
+            gate_log.warning(
+                "gate TRIPPED | phase=%s table=%s → HTTP 410",
+                self.phase, self.table,
+            )
             raise TableDeletedError(self.table, self.phase)
         gate_log.debug("gate ok | phase=%s table=%s", self.phase, self.table)
 

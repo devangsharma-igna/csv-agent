@@ -7,14 +7,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import context_store
-from ..agents.base import TableDeletedError, TableExistenceGate
+from ..agents.base import TableDeletedError, TableExistenceGate, init_gate_cache
 from ..agents.context_builder import ContextBuilder
 from ..agents.figure_builder import FigureBuilder
 from ..agents.nl_parser import NLParser
 from ..agents.nl_responder import NLResponder
 from ..agents.sql_agent import SQLAgent
 from ..logging_utils import trunc
-from ..mcp_client import MCPToolError, mcp
+from ..mcp_client import MCPToolError
 
 log = logging.getLogger("igna.query")
 router = APIRouter()
@@ -31,12 +31,14 @@ async def query(req: QueryRequest) -> dict[str, Any]:
     if not table:
         raise HTTPException(status_code=400, detail="missing table")
     log.info("════ query START | table=%s question=%s", table, trunc(req.question, 250))
+    # Initialise empty per-request gate cache. All boundary gates in this
+    # handler reuse the result; in-loop gates inside ReAct loops bypass it.
+    init_gate_cache()
 
     try:
-        # Boundary gate 1: before ANY agent runs.
+        # Boundary gate 1: cache miss → fresh MCP call; populates cache.
         log.info("phase=pre_pipeline | gate check")
-        if not await mcp.table_exists(table):
-            raise TableDeletedError(table, phase="pre_pipeline")
+        await TableExistenceGate(table, "pre_pipeline").check()
 
         # 1) Context — load cached or build.
         context = context_store.load(table)

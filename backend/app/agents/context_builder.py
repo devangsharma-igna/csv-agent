@@ -24,7 +24,7 @@ class ContextBuilder:
         log.info("context_builder ▶ | table=%s", table)
         # Entry gate is enforced by the caller (orchestrator pre_context, or the
         # refresh endpoint). We only need the in-loop gate for MCP observations.
-        gate = TableExistenceGate(table, phase=self.name)
+        gate = TableExistenceGate(table, phase=self.name, in_loop=True)
         system = load_prompt("context_builder")
         user = (
             f"Target table: `{table}` (schema: public).\n"

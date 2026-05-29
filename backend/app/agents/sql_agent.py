@@ -35,19 +35,39 @@ class SQLAgent:
         )
         # Entry gate covered by orchestrator pre_sql. In-loop gate still runs
         # after every MCP observation inside react_loop.
-        gate = TableExistenceGate(table, phase=self.name)
+        gate = TableExistenceGate(table, phase=self.name, in_loop=True)
         system = load_prompt("sql_agent")
-        schema_only = {
+
+        # Build a richer schema payload so the first SQL attempt succeeds more
+        # often without needing a retry round-trip.
+        # Include distinct cardinality for every column (helps choose between
+        # COUNT(DISTINCT) vs GROUP BY, and flags low-cardinality text cols).
+        # Include sample_rows from context so the agent sees actual value formats
+        # (date strings, enum spellings, numeric precision).
+        target_cols = set(parsed.get("target_columns") or [])
+        schema_rich = {
             "table": context.get("table"),
             "pk": context.get("pk"),
             "columns": [
-                {"name": c["name"], "type": c.get("type"), "semantic": c.get("semantic")}
+                {
+                    "name": c["name"],
+                    "type": c.get("type"),
+                    "semantic": c.get("semantic"),
+                    "distinct": c.get("distinct"),          # cardinality hint
+                    "null_pct": c.get("null_pct"),          # avoid unnecessary IS NOT NULL
+                    "is_target": c["name"] in target_cols,  # flag columns NL Parser chose
+                }
                 for c in context.get("columns", [])
             ],
         }
+        # Attach up to 3 sample rows so the agent sees real value formats.
+        sample_rows = context.get("sample_rows", [])[:3]
+
         user = (
             f"TABLE: {table}\n"
-            f"SCHEMA:\n{json.dumps(schema_only, default=str)}\n\n"
+            f"SCHEMA:\n{json.dumps(schema_rich, default=str)}\n\n"
+            f"SAMPLE ROWS (real data, use for format/spelling reference):\n"
+            f"{json.dumps(sample_rows, default=str)}\n\n"
             f"REFINED QUERY: {parsed.get('refined_query') or parsed.get('intent')}\n"
             f"TARGET COLUMNS: {parsed.get('target_columns', [])}\n"
             f"FILTERS HINT: {parsed.get('filters_hint', '')}\n\n"
