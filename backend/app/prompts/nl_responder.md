@@ -33,6 +33,11 @@ Set `wants_figure: false` if:
 - The result has >50 rows (table is better than a chart).
 - The data isn't naturally chartable.
 
+# Figure spec rules
+- **`group_by`**: only set this when the grouping column has **≤8 distinct values** across all result rows. If the column has more distinct values (e.g. restaurant names, outlet names), omit `group_by` entirely — a per-row bar is cleaner.
+- **Area/location x-axis**: for queries like "top N areas by rating" or "area-wise split", set `x` to the area column and `y` to the metric (e.g. rating, count). Do NOT set `group_by` to an outlet/restaurant name column — that produces an unreadable legend.
+- **Readable x-axis**: prefer ≤20 bars. If the SQL already limits to top N rows, the x-axis is inherently bounded.
+
 # Rules
 - Cite specific numbers from the rows.
 - If the rows look truncated, say so.

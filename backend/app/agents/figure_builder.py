@@ -35,7 +35,8 @@ class FigureBuilder:
 
         fig, ax = plt.subplots(figsize=(8, 5))
         try:
-            if group_by and group_by in rows[0]:
+            distinct_groups = len({r[group_by] for r in rows}) if group_by and group_by in rows[0] else 0
+            if group_by and group_by in rows[0] and distinct_groups <= 10:
                 groups: dict[Any, list[tuple[Any, Any]]] = {}
                 for r in rows:
                     groups.setdefault(r[group_by], []).append((r[x], r[y]))

@@ -158,7 +158,24 @@ export default function QueryPage() {
             ].filter(Boolean).join(' ')}>
               <div>{m.text}</div>
               {m.figure && (
-                <img src={`data:image/png;base64,${m.figure}`} alt="figure" className="mt-2 rounded border bg-white" />
+                <div className="mt-2">
+                  <img
+                    src={`data:image/png;base64,${m.figure}`}
+                    alt="figure"
+                    className="rounded border bg-white max-w-full cursor-zoom-in"
+                    title="Click to open full screen"
+                    onClick={() => {
+                      const win = window.open('', '_blank');
+                      if (win) {
+                        win.document.write(
+                          `<html><head><title>Chart</title><style>*{margin:0;padding:0}body{background:#1e1e1e;display:flex;align-items:center;justify-content:center;min-height:100vh}img{max-width:100vw;max-height:100vh;object-fit:contain}</style></head><body><img src="data:image/png;base64,${m.figure}"/></body></html>`
+                        );
+                        win.document.close();
+                      }
+                    }}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">Click chart to open full screen</p>
+                </div>
               )}
               {m.sql && (
                 <details className="mt-2 text-xs text-slate-500">
