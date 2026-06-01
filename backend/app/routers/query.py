@@ -10,9 +10,8 @@ from .. import context_store
 from ..agents.base import TableDeletedError, TableExistenceGate, init_gate_cache
 from ..agents.context_builder import ContextBuilder
 from ..agents.figure_builder import FigureBuilder
-from ..agents.nl_parser import NLParser
 from ..agents.nl_responder import NLResponder
-from ..agents.sql_agent import SQLAgent
+from ..agents.query_planner import QueryPlanner
 from ..logging_utils import trunc
 from ..mcp_client import MCPToolError
 
@@ -50,25 +49,29 @@ async def query(req: QueryRequest) -> dict[str, Any]:
         else:
             log.info("phase=pre_context | reusing cached context (%d columns)", len(context.get("columns", [])))
 
-        # Boundary gate 2: before NL Parser.
-        log.info("phase=pre_parser | gate check")
-        await TableExistenceGate(table, "pre_parser").check()
-        parsed = await NLParser().parse(question=req.question, context=context)
+        # 2) Plan + SQL — one LLM call for scope gate + SQL generation.
+        log.info("phase=pre_planner | gate check")
+        await TableExistenceGate(table, "pre_planner").check()
+        plan, rows = await QueryPlanner().plan(question=req.question, context=context)
 
-        if not parsed.get("allowed", False):
-            log.warning("════ query DENIED (out_of_scope) | reason=%s", trunc(parsed.get("reason"), 250))
+        if not plan.get("allowed", False):
+            log.warning("════ query DENIED (out_of_scope) | reason=%s", trunc(plan.get("reason"), 250))
             return {
                 "status": "out_of_scope",
-                "reason": parsed.get("reason") or "question is out of scope for this table",
-                "parsed": parsed,
+                "reason": plan.get("reason") or "question is out of scope for this table",
+                "parsed": plan,
             }
 
-        # Boundary gate 3: before SQL Agent.
-        log.info("phase=pre_sql | gate check")
-        await TableExistenceGate(table, "pre_sql").check()
-        sql_result = await SQLAgent().run(table=table, parsed=parsed, context=context)
+        # Normalise into the same shape downstream agents + response expect.
+        parsed = plan
+        sql_result = {
+            "final_sql": plan.get("final_sql"),
+            "row_count": plan.get("row_count"),
+            "rows": rows,
+            "notes": plan.get("notes", ""),
+        }
 
-        # Boundary gate 4: before NL Responder.
+        # Boundary gate: before NL Responder.
         log.info("phase=pre_responder | gate check")
         await TableExistenceGate(table, "pre_responder").check()
         answer = await NLResponder().respond(
