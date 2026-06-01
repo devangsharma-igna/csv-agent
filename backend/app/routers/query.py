@@ -26,7 +26,12 @@ class QueryRequest(BaseModel):
 
 @router.post("/query")
 async def query(req: QueryRequest) -> dict[str, Any]:
+    # Normalise schema-qualified names (e.g. 'public.foo' → 'foo').
+    # Supabase MCP list_tables may return qualified names; strip the prefix so
+    # information_schema queries and context-store keys stay consistent.
     table = req.table.strip()
+    if "." in table:
+        table = table.split(".", 1)[1]
     if not table:
         raise HTTPException(status_code=400, detail="missing table")
     log.info("════ query START | table=%s question=%s", table, trunc(req.question, 250))

@@ -12,10 +12,16 @@ log = logging.getLogger("igna.tables")
 router = APIRouter()
 
 
+def _bare(name: str) -> str:
+    """Strip schema prefix: 'public.foo' → 'foo', 'foo' → 'foo'."""
+    return name.split(".", 1)[-1] if "." in name else name
+
+
 @router.get("")
 async def list_tables() -> dict:
     tables = await mcp.list_tables(["public"])
-    names = [t.get("name") for t in tables if t.get("name")]
+    names = [_bare(t.get("name", "")) for t in tables if t.get("name")]
+    names = [n for n in names if n]  # drop any empties after stripping
     cached = set(context_store.list_cached())
     log.info("list_tables | found=%d with_context=%d", len(names), sum(1 for n in names if n in cached))
     return {
