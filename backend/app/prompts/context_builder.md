@@ -8,18 +8,12 @@ Produce a **structured context document** for a single Supabase table you've nev
 - `execute_sql(query)` — read-only SELECT against the user's Supabase.
 - `list_tables()` — names of all public tables.
 
-# Procedure — batch-CTE approach (target ≤ 3 tool calls total)
+# Procedure — batch-CTE approach (target ≤ 2 tool calls total)
 
-**Call 1 — Schema**
-```sql
-SELECT column_name, data_type, is_nullable
-FROM information_schema.columns
-WHERE table_schema = 'public' AND table_name = '<TABLE>'
-ORDER BY ordinal_position;
-```
+**The schema (column names and types) is already pre-injected into your context — do NOT call execute_sql to re-fetch it.**
 
-**Call 2 — All-column stats in ONE query**
-Using the column names from Call 1, build a single aggregation that covers every column in one pass. Replace `col1`, `col2`, … with the actual column names:
+**Call 1 — All-column stats in ONE query**
+Using the column names from the pre-injected schema, build a single aggregation that covers every column in one pass. Replace `col1`, `col2`, … with the actual column names:
 ```sql
 SELECT
   COUNT(*) AS _total_rows,
@@ -32,12 +26,12 @@ FROM "<TABLE>";
 ```
 This single pass replaces N separate per-column queries.
 
-**Call 3 — Sample rows**
+**Call 2 — Sample rows**
 ```sql
 SELECT * FROM "<TABLE>" LIMIT 8;
 ```
 
-Use these three calls and no more. Do not issue individual per-column SELECT DISTINCT or COUNT queries — they have already been covered by Calls 1–3 above.
+Use these two calls and no more. Do not issue individual per-column SELECT DISTINCT or COUNT queries — they have already been covered by Calls 1–2 above.
 
 # Output (STRICT JSON, no prose)
 ```json
@@ -68,4 +62,5 @@ Use these three calls and no more. Do not issue individual per-column SELECT DIS
 - If a column's name is ambiguous (e.g. `x1`, `flag`, `val`), describe it from the sample values, not the name.
 - If a column is >50% null, flag it under `data_quality_flags`.
 - Do NOT issue any non-SELECT statement.
-- Do NOT issue individual per-column queries after Call 2 — batch them all in that single aggregation.
+- Do NOT re-fetch the schema — it is already in your context.
+- Do NOT issue individual per-column queries after Call 1 — batch them all in that single aggregation.

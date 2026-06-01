@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     FRONTEND_ORIGIN: str = "http://localhost:5173"
 
     MAX_REACT_ITERATIONS: int = 8
-    MAX_SQL_RETRIES: int = 3
+    MAX_SQL_RETRIES: int = 2
     INSERT_BATCH_SIZE: int = 500
     # NL Parser: max columns sent to the scope-gate LLM for wide tables.
     # Tables with more columns than this are pre-filtered by keyword relevance.

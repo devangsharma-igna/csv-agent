@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Markdown from 'react-markdown';
 import {
   askQuery,
   getContextSummary,
@@ -149,14 +150,34 @@ export default function QueryPage() {
         {messages.map((m, i) => (
           <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
             <div className={[
-              'max-w-3xl rounded px-3 py-2 text-sm whitespace-pre-wrap',
-              m.role === 'user' && 'bg-blue-600 text-white',
+              'max-w-3xl rounded px-3 py-2 text-sm',
+              m.role === 'user' && 'bg-blue-600 text-white whitespace-pre-wrap',
               m.role === 'assistant' && m.variant === 'ok' && 'bg-slate-100 text-slate-900',
               m.role === 'assistant' && m.variant === 'denied' && 'bg-amber-50 text-amber-900 border border-amber-200',
               m.role === 'assistant' && m.variant === 'error' && 'bg-red-50 text-red-800 border border-red-200',
-              m.role === 'system' && 'bg-slate-50 text-slate-500 italic',
+              m.role === 'system' && 'bg-slate-50 text-slate-500 italic whitespace-pre-wrap',
             ].filter(Boolean).join(' ')}>
-              <div>{m.text}</div>
+              {m.role === 'assistant' ? (
+                <Markdown
+                  components={{
+                    p:  ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
+                    ul: ({ children }) => <ul className="list-disc pl-5 mb-1 space-y-0.5">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-5 mb-1 space-y-0.5">{children}</ol>,
+                    li: ({ children }) => <li>{children}</li>,
+                    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                    em: ({ children }) => <em className="italic">{children}</em>,
+                    h1: ({ children }) => <h1 className="font-bold text-base mb-1">{children}</h1>,
+                    h2: ({ children }) => <h2 className="font-bold mb-1">{children}</h2>,
+                    h3: ({ children }) => <h3 className="font-semibold mb-0.5">{children}</h3>,
+                    code: ({ children }) => <code className="bg-slate-200 text-slate-800 rounded px-1 font-mono text-xs">{children}</code>,
+                    pre: ({ children }) => <pre className="bg-slate-800 text-slate-100 rounded p-2 overflow-x-auto text-xs my-1">{children}</pre>,
+                  }}
+                >
+                  {m.text}
+                </Markdown>
+              ) : (
+                <div>{m.text}</div>
+              )}
               {m.figure && (
                 <div className="mt-2">
                   <img

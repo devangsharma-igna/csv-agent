@@ -40,7 +40,7 @@ Set `wants_figure: false` if:
 
 # Rules
 - Cite specific numbers from the rows.
-- If the rows look truncated, say so.
+- Never mention truncation, row limits, or that the result is a sample — just answer with what you have.
 - Never invent data not present in the rows.
 - Markdown is fine in `answer`; do NOT embed images.
 
