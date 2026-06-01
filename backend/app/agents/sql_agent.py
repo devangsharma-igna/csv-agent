@@ -6,18 +6,24 @@ from typing import Any
 
 from ..config import settings
 from ..logging_utils import trunc
+from ..mcp_client import MCPToolError, mcp
 from .base import (
     TableExistenceGate,
     load_prompt,
-    react_loop,
-    supabase_select_tool,
+    single_shot_json,
 )
 
 log = logging.getLogger("igna.agent.sql_agent")
 
+_RETRY_SUFFIX = (
+    "\n\nThe previous SQL failed with this Postgres error:\n"
+    "ERROR: {error}\n\n"
+    "Fix the SQL and return the corrected JSON object."
+)
+
 
 class SQLAgent:
-    """Agent 3 — writes + executes SQL, self-corrects on Postgres errors."""
+    """Agent 3 — writes SQL in one shot, executes in Python, retries on error."""
 
     name = "sql_agent"
 
@@ -33,17 +39,9 @@ class SQLAgent:
             table, parsed.get("intent"), parsed.get("target_columns"),
             trunc(parsed.get("refined_query"), 250),
         )
-        # Entry gate covered by orchestrator pre_sql. In-loop gate still runs
-        # after every MCP observation inside react_loop.
-        gate = TableExistenceGate(table, phase=self.name, in_loop=True)
+        gate = TableExistenceGate(table, phase=self.name, in_loop=False)
         system = load_prompt("sql_agent")
 
-        # Build a richer schema payload so the first SQL attempt succeeds more
-        # often without needing a retry round-trip.
-        # Include distinct cardinality for every column (helps choose between
-        # COUNT(DISTINCT) vs GROUP BY, and flags low-cardinality text cols).
-        # Include sample_rows from context so the agent sees actual value formats
-        # (date strings, enum spellings, numeric precision).
         target_cols = set(parsed.get("target_columns") or [])
         schema_rich = {
             "table": context.get("table"),
@@ -53,17 +51,16 @@ class SQLAgent:
                     "name": c["name"],
                     "type": c.get("type"),
                     "semantic": c.get("semantic"),
-                    "distinct": c.get("distinct"),          # cardinality hint
-                    "null_pct": c.get("null_pct"),          # avoid unnecessary IS NOT NULL
-                    "is_target": c["name"] in target_cols,  # flag columns NL Parser chose
+                    "distinct": c.get("distinct"),
+                    "null_pct": c.get("null_pct"),
+                    "is_target": c["name"] in target_cols,
                 }
                 for c in context.get("columns", [])
             ],
         }
-        # Attach up to 3 sample rows so the agent sees real value formats.
         sample_rows = context.get("sample_rows", [])[:3]
 
-        user = (
+        base_user = (
             f"TABLE: {table}\n"
             f"SCHEMA:\n{json.dumps(schema_rich, default=str)}\n\n"
             f"SAMPLE ROWS (real data, use for format/spelling reference):\n"
@@ -71,29 +68,38 @@ class SQLAgent:
             f"REFINED QUERY: {parsed.get('refined_query') or parsed.get('intent')}\n"
             f"TARGET COLUMNS: {parsed.get('target_columns', [])}\n"
             f"FILTERS HINT: {parsed.get('filters_hint', '')}\n\n"
-            f"Write and execute the SQL. Then reply ONLY with the JSON object."
+            f"Write the SQL and reply ONLY with the JSON object."
         )
-        # Capture each successful execute_sql observation so we can return the
-        # ACTUAL rows without asking the LLM to echo them in its JSON output.
-        # In the previous design the LLM spent ~40s/call regurgitating result
-        # sets into a `rows: [...]` field — wasteful and a re-ask risk.
-        observations: list[dict[str, Any]] = []
-        result = await react_loop(
-            system=system,
-            user=user,
-            tools=[supabase_select_tool()],
-            gate=gate,
-            max_iter=1 + settings.MAX_SQL_RETRIES * 2,
-            observations=observations,
-        )
+
+        user = base_user
+        result: dict[str, Any] = {}
         rows: list[dict[str, Any]] = []
-        for obs in reversed(observations):
-            if obs["tool"] == "execute_sql" and isinstance(obs["result"], list):
-                rows = obs["result"]
+        last_error: str = ""
+
+        for attempt in range(1 + settings.MAX_SQL_RETRIES):
+            result = await single_shot_json(system=system, user=user, phase=self.name)
+            sql = (result.get("final_sql") or "").strip().rstrip(";")
+            if not sql:
+                log.warning("sql_agent attempt %d: no SQL in response", attempt + 1)
                 break
-        # Merge captured rows with the LLM's final JSON (final_sql, notes).
+
+            log.info("sql_agent attempt %d → %s", attempt + 1, trunc(sql, 400))
+            try:
+                rows = await mcp.execute_sql(sql)
+                await gate.check()
+                break
+            except MCPToolError as exc:
+                last_error = exc.message
+                log.warning("sql_agent attempt %d failed | %s", attempt + 1, trunc(last_error, 300))
+                if "does not exist" in last_error.lower() or "undefined_table" in last_error.lower():
+                    await gate.check()  # raises TableDeletedError
+                if attempt < settings.MAX_SQL_RETRIES:
+                    user = base_user + _RETRY_SUFFIX.format(error=last_error)
+
         result["rows"] = rows
         result["row_count"] = result.get("row_count") or len(rows)
+        if last_error and not rows:
+            result.setdefault("notes", f"SQL failed after {1 + settings.MAX_SQL_RETRIES} attempts: {last_error}")
         log.info(
             "sql_agent ✓ | rows=%s sql=%s",
             result.get("row_count"), trunc(result.get("final_sql"), 300),

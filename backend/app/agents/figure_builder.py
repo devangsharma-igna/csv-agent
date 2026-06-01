@@ -18,6 +18,10 @@ class FigureBuilder:
 
     name = "figure_builder"
 
+    # Max data points rendered per chart. Beyond this the labels become unreadable
+    # and matplotlib tries to draw hundreds of bars/points into a fixed canvas.
+    MAX_PLOT_ROWS = 30
+
     def render(self, spec: dict[str, Any], rows: list[dict[str, Any]]) -> str | None:
         log.info("figure_builder ▶ | chart=%s x=%s y=%s group_by=%s rows=%d",
                  spec.get("chart"), spec.get("x"), spec.get("y"), spec.get("group_by"), len(rows))
@@ -32,6 +36,11 @@ class FigureBuilder:
         if not x or not y or x not in rows[0] or y not in rows[0]:
             log.warning("figure_builder skipped | x/y not present in rows (x=%s y=%s cols=%s)", x, y, list(rows[0].keys()))
             return None
+
+        if len(rows) > self.MAX_PLOT_ROWS:
+            log.info("figure_builder capped rows %d → %d", len(rows), self.MAX_PLOT_ROWS)
+            rows = rows[:self.MAX_PLOT_ROWS]
+            title = f"{title} (top {self.MAX_PLOT_ROWS})".strip()
 
         fig, ax = plt.subplots(figsize=(8, 5))
         try:
@@ -68,7 +77,7 @@ class FigureBuilder:
                     ax.pie(ys, labels=[str(v) for v in xs], autopct="%1.1f%%")
                 else:
                     ax.bar([str(v) for v in xs], ys)
-                    plt.xticks(rotation=30, ha="right")
+                    plt.xticks(rotation=45, ha="right", fontsize=8)
             ax.set_title(title)
             if chart != "pie":
                 ax.set_xlabel(x)
