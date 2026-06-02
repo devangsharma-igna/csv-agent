@@ -26,7 +26,6 @@ class NLResponder:
     ) -> dict[str, Any]:
         log.info("nl_responder ▶ | table=%s rows_seen=%d", table, sql_result.get("row_count", 0))
         # Entry gate covered by orchestrator pre_responder. No MCP tools here.
-        system = load_prompt("nl_responder")
         rows = sql_result.get("rows", [])
         total = sql_result.get("row_count", len(rows))
         # Cap rows fed to the LLM to keep token cost bounded.
@@ -36,6 +35,12 @@ class NLResponder:
             {"name": c["name"], "type": c.get("type"), "semantic": c.get("semantic")}
             for c in context.get("columns", [])
         ]
+        # Schema is stable per table → pin to system prompt for prefix caching.
+        # Rows + SQL are query-specific → stay in the user turn.
+        system = (
+            load_prompt("nl_responder")
+            + f"\n\n## TABLE SCHEMA\n{json.dumps(schema_only)}"
+        )
         user = (
             f"USER QUESTION: {question}\n"
             f"INTENT: {parsed.get('intent')}\n"
@@ -43,7 +48,6 @@ class NLResponder:
             f"SQL: {sql_result.get('final_sql')}\n"
             f"ROW COUNT (full): {total}  (showing {len(sample)}{' — truncated' if truncated else ''})\n"
             f"ROWS:\n{json.dumps(sample, default=str)}\n\n"
-            f"SCHEMA: {json.dumps(schema_only)}\n\n"
             f"Reply ONLY with the JSON object."
         )
         result = await single_shot_json(system=system, user=user, phase=self.name)

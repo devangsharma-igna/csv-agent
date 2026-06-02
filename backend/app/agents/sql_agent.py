@@ -6,7 +6,7 @@ from typing import Any
 
 from ..config import settings
 from ..logging_utils import trunc
-from ..mcp_client import MCPToolError, mcp
+from ..db_client import MCPToolError, mcp
 from .base import (
     TableExistenceGate,
     load_prompt,

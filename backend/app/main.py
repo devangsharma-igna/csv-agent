@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .logging_utils import trunc
-from .mcp_client import mcp
+from .db_client import mcp
 from .routers import csv as csv_router
 from .routers import query as query_router
 from .routers import tables as tables_router

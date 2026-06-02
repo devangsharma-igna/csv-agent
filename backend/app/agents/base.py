@@ -21,7 +21,7 @@ from openai import AsyncAzureOpenAI
 
 from ..config import settings
 from ..logging_utils import trunc
-from ..mcp_client import MCPToolError, mcp
+from ..db_client import MCPToolError, mcp
 
 log = logging.getLogger("igna.agent")
 gate_log = logging.getLogger("igna.gate")
@@ -142,7 +142,7 @@ def supabase_select_tool() -> tuple[Tool, ToolImpl]:
         "function": {
             "name": "execute_sql",
             "description": (
-                "Execute a single read-only PostgreSQL SELECT against the user's Supabase. "
+                "Execute a single read-only SQL SELECT against the local database. "
                 "No DDL, no INSERT/UPDATE/DELETE. Returns the rows as JSON."
             ),
             "parameters": {
@@ -171,7 +171,7 @@ def list_tables_tool() -> tuple[Tool, ToolImpl]:
         "type": "function",
         "function": {
             "name": "list_tables",
-            "description": "List tables in the public schema of the user's Supabase.",
+            "description": "List tables in the public schema of the local database.",
             "parameters": {"type": "object", "properties": {}},
         },
     }

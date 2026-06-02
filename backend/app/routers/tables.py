@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from .. import context_store
 from ..agents.context_builder import ContextBuilder
-from ..mcp_client import mcp
+from ..db_client import mcp
 
 log = logging.getLogger("igna.tables")
 router = APIRouter()

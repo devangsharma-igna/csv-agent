@@ -13,7 +13,7 @@ from ..agents.figure_builder import FigureBuilder
 from ..agents.nl_responder import NLResponder
 from ..agents.query_planner import QueryPlanner
 from ..logging_utils import trunc
-from ..mcp_client import MCPToolError
+from ..db_client import MCPToolError
 
 log = logging.getLogger("igna.query")
 router = APIRouter()

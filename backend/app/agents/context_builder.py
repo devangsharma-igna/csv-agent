@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ..mcp_client import mcp
+from ..db_client import mcp
 from .base import load_prompt, single_shot_json
 
 log = logging.getLogger("igna.agent.context_builder")

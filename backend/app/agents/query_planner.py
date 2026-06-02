@@ -6,7 +6,7 @@ from typing import Any
 
 from ..config import settings
 from ..logging_utils import trunc
-from ..mcp_client import MCPToolError, mcp
+from ..db_client import MCPToolError, mcp
 from .base import TableExistenceGate, load_prompt, single_shot_json
 
 log = logging.getLogger("igna.agent.query_planner")
@@ -65,10 +65,17 @@ class QueryPlanner:
         }
         sample_rows = context.get("sample_rows", [])[:3]
 
+        # Pin table context to the system prompt so Azure OpenAI's prefix cache
+        # can reuse it across consecutive queries to the same table.
+        # The user turn carries only the question (changes every call).
+        system = (
+            load_prompt("query_planner")
+            + f"\n\n## TABLE CONTEXT\n{json.dumps(schema_full, default=str)}"
+            + f"\n\n## SAMPLE ROWS (use for enum spellings, date formats, numeric precision)\n"
+            + json.dumps(sample_rows, default=str)
+        )
+
         base_user = (
-            f"TABLE CONTEXT:\n{json.dumps(schema_full, default=str)}\n\n"
-            f"SAMPLE ROWS (real data — use for enum spellings, date formats, numeric precision):\n"
-            f"{json.dumps(sample_rows, default=str)}\n\n"
             f"USER QUESTION: {question}\n\n"
             f"Reply ONLY with the JSON object."
         )

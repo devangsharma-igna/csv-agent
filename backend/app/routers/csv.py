@@ -11,12 +11,10 @@ from ..agents.context_builder import ContextBuilder
 from ..config import settings
 from ..csv_inference import (
     CsvPreview,
-    build_create_table,
-    build_insert_batches,
     parse_csv,
     sanitize_table,
 )
-from ..mcp_client import MCPToolError, mcp
+from ..db_client import MCPToolError, mcp
 
 log = logging.getLogger("igna.csv")
 router = APIRouter()
@@ -74,9 +72,8 @@ async def csv_commit(req: CommitRequest) -> dict[str, Any]:
     if not table:
         raise HTTPException(status_code=400, detail="invalid table name")
 
-    # Materialize the source dataframe up front so we can validate the user's
-    # PK choice BEFORE any DDL runs. A failed INSERT after CREATE TABLE leaves
-    # an empty table behind in Supabase — bad UX.
+    # Materialize the dataframe up front so we can validate PK BEFORE writing
+    # anything — a failed validation on disk would require cleanup.
     sanitized_by_orig = {c.original_name: c.sanitized_name for c in preview.columns}
     null_fills = {c.name: c.null_fill for c in req.columns}
     import io
@@ -121,54 +118,26 @@ async def csv_commit(req: CommitRequest) -> dict[str, Any]:
                 ),
             )
 
-    # Build CREATE TABLE + apply via MCP migration (only after PK is validated).
-    ddl = build_create_table(
-        table=table,
-        columns=[c.model_dump() for c in req.columns],
-        pks=req.primary_keys,
-    )
-    # Drop-create semantics: every CSV upload replaces the table. We evict the
-    # cached context up front so a mid-flight failure doesn't leave a stale
-    # ./context/{table}.json pointing at the old schema.
+    # Evict stale context before writing so a mid-flight failure doesn't leave
+    # old context pointing at the new (potentially different) schema.
     replaced = await mcp.table_exists(table)
     context_store.evict(table)
-    log.info(
-        "CSV commit: %s table %s\n%s",
-        "DROP+CREATE replacing" if replaced else "CREATE",
-        table,
-        ddl,
-    )
-    try:
-        await mcp.apply_migration(name=f"replace_{table}", query=ddl)
-    except MCPToolError as e:
-        log.exception("apply_migration failed: %s", e.message)
-        raise HTTPException(status_code=502, detail=f"Supabase rejected DROP/CREATE: {e.message}") from e
 
+    # Write cleaned DataFrame to data directory. DuckDB reads it directly as a
+    # view — no DDL, no INSERT batches needed.
     col_names = [c.name for c in req.columns]
-    rows = df[col_names].where(df[col_names].notna(), None).to_dict(orient="records")
+    dest = settings.data_path / f"{table}.csv"
+    df[col_names].to_csv(dest, index=False)
+    log.info("csv commit | wrote %d rows → %s (%s)", len(df), dest,
+             "replacing" if replaced else "new")
 
-    inserted = 0
-    if rows:
-        statements = build_insert_batches(
-            table=table,
-            columns=col_names,
-            rows=rows,
-            batch_size=settings.INSERT_BATCH_SIZE,
-        )
-        log.info("csv commit | inserting %d rows in %d batch(es) of %d",
-                 len(rows), len(statements), settings.INSERT_BATCH_SIZE)
-        for i, sql in enumerate(statements):
-            try:
-                await mcp.execute_sql(sql)
-                inserted += min(settings.INSERT_BATCH_SIZE, len(rows) - inserted)
-                log.info("csv commit | batch %d/%d ok (running total: %d/%d)",
-                         i + 1, len(statements), inserted, len(rows))
-            except MCPToolError as e:
-                log.exception("INSERT batch %d/%d failed: %s", i + 1, len(statements), e.message)
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Insert failed after partial load ({inserted} rows in): {e.message}",
-                ) from e
+    # Register as a DuckDB view with the user-confirmed column types.
+    columns_spec = [{"name": c.name, "type": c.type} for c in req.columns]
+    try:
+        await mcp.register_csv(table, dest, columns_spec)
+    except MCPToolError as e:
+        log.exception("register_csv failed: %s", e.message)
+        raise HTTPException(status_code=500, detail=f"Failed to register table: {e.message}") from e
 
     # Build and persist fresh context for the new table.
     log.info("csv commit | triggering Context Builder for fresh schema")
@@ -178,10 +147,10 @@ async def csv_commit(req: CommitRequest) -> dict[str, Any]:
 
     _PREVIEW_CACHE.pop(req.preview_id, None)
     log.info("csv commit ✓ | table=%s rows=%d replaced=%s context=%s",
-             table, inserted, replaced, context_path)
+             table, len(df), replaced, context_path)
     return {
         "table": table,
-        "row_count": inserted,
+        "row_count": len(df),
         "replaced": replaced,
         "context_path": str(context_path),
     }
