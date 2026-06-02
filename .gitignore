@@ -13,10 +13,8 @@ frontend/dist/
 context/*.json
 !context/.gitkeep
 
-# Local data store — CSV uploads + DuckDB catalog (user data, not source)
+# Local data store — CSV uploads (user data, not source)
 data/*.csv
-data/*.duckdb
-data/*.duckdb.wal
 !data/.gitkeep
 
 # Editor / OS

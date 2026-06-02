@@ -65,9 +65,11 @@ class LocalDB:
     async def start(self) -> None:
         if self._con is not None:
             return
-        db_path = settings.data_path / "igna.duckdb"
-        log.info("opening DuckDB | path=%s", db_path)
-        self._con = duckdb.connect(str(db_path))
+        # In-memory: CSVs in data/ are the sole source of truth.
+        # No .duckdb catalog file needed — _restore_views rebuilds views from
+        # the CSV files on every start, so there is no persisted state to go stale.
+        log.info("opening DuckDB (in-memory)")
+        self._con = duckdb.connect()
         # Create the 'public' schema so information_schema queries that filter on
         # table_schema = 'public' work without any changes to callers.
         self._con.execute("CREATE SCHEMA IF NOT EXISTS public")
@@ -169,6 +171,22 @@ class LocalDB:
             raise MCPToolError("register_csv", str(exc)) from exc
         log.info("register_csv ✓ | table=%s", table)
 
+    def drop_view_sync(self, table: str) -> None:
+        """Drop the DuckDB view synchronously.
+
+        Called from the watchdog thread (non-async context) when the backing CSV
+        is deleted externally. The CSV ↔ view binding is strict — if the file is
+        gone the view must go too so queries fail fast instead of returning a
+        misleading DuckDB 'file not found' error.
+        """
+        if self._con is None:
+            return
+        try:
+            self._con.execute(f'DROP VIEW IF EXISTS public."{table}"')
+            log.info("drop_view_sync ✓ | table=%s", table)
+        except duckdb.Error as exc:
+            log.warning("drop_view_sync failed | table=%s error=%s", table, exc)
+
     # ------------------------------------------------------------------ internal
 
     def _run_query(self, query: str) -> list[dict[str, Any]]:
@@ -183,13 +201,27 @@ class LocalDB:
         return [dict(zip(cols, row)) for row in result.fetchall()]
 
     async def _restore_views(self) -> None:
-        """Re-register all CSV views from DATA_DIR at startup. Fast and idempotent."""
+        """Re-register CSV views at startup and evict any context whose schema drifted.
+
+        Because the catalog is in-memory, views are always built fresh from the
+        CSV files. We still check for schema drift between the CSV headers and the
+        cached context JSON so that any off-line schema change triggers a context
+        rebuild on the next query rather than sending stale column info to the LLM.
+        """
+        from . import context_store
+        from .data_watcher import _schema_changed
+
         csvs = list(settings.data_path.glob("*.csv"))
         log.info("restore_views | %d CSV(s) in %s", len(csvs), settings.data_path)
         for csv_path in csvs:
             table = csv_path.stem
             try:
                 await self.register_csv(table, csv_path)
+                if _schema_changed(table, csv_path):
+                    context_store.evict(table)
+                    log.warning(
+                        "restore_views: schema drift → context evicted | table=%s", table
+                    )
             except Exception:
                 log.exception("restore_views ✗ | table=%s (skipping)", table)
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import context_store
+from .. import context_store, data_watcher
 from ..agents.base import TableDeletedError, TableExistenceGate, init_gate_cache
 from ..agents.context_builder import ContextBuilder
 from ..agents.figure_builder import FigureBuilder
@@ -35,9 +36,12 @@ async def query(req: QueryRequest) -> dict[str, Any]:
     if not table:
         raise HTTPException(status_code=400, detail="missing table")
     log.info("════ query START | table=%s question=%s", table, trunc(req.question, 250))
-    # Initialise empty per-request gate cache. All boundary gates in this
-    # handler reuse the result; in-loop gates inside ReAct loops bypass it.
     init_gate_cache()
+
+    # Register this asyncio task so the watcher can cancel it instantly if
+    # the table's CSV is deleted while an LLM call is in flight.
+    task = asyncio.current_task()
+    data_watcher.register_task(table, task)
 
     try:
         # Boundary gate 1: cache miss → fresh MCP call; populates cache.
@@ -106,9 +110,23 @@ async def query(req: QueryRequest) -> dict[str, Any]:
             "parsed": parsed,
         }
 
+    except asyncio.CancelledError:
+        # Watcher cancelled this task because the CSV was deleted mid-LLM-call.
+        # Suppressing CancelledError here is intentional — we convert it to an
+        # HTTP 410 so the frontend gets a clean error instead of a hung request.
+        log.warning("════ query ABORT (cancelled — table deleted mid-flight) | table=%s", table)
+        context_store.evict(table)
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "table_deleted",
+                "table": table,
+                "phase": "mid_llm_call",
+                "message": f"Table '{table}' was deleted while the query was running.",
+            },
+        )
     except TableDeletedError as e:
         log.warning("════ query ABORT (table_deleted) | table=%s phase=%s", e.table, e.phase)
-        # Hard circuit break — evict cached context.
         context_store.evict(e.table)
         raise HTTPException(
             status_code=410,
@@ -125,3 +143,5 @@ async def query(req: QueryRequest) -> dict[str, Any]:
     except RuntimeError as e:
         log.error("════ query ABORT (agent_failure) | %s", trunc(str(e), 400))
         raise HTTPException(status_code=500, detail={"error": "agent_failure", "message": str(e)}) from e
+    finally:
+        data_watcher.unregister_task(table, task)

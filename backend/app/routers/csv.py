@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from .. import context_store
+from .. import context_store, data_watcher
 from ..agents.context_builder import ContextBuilder
 from ..config import settings
 from ..csv_inference import (
@@ -120,8 +120,10 @@ async def csv_commit(req: CommitRequest) -> dict[str, Any]:
 
     # Evict stale context before writing so a mid-flight failure doesn't leave
     # old context pointing at the new (potentially different) schema.
+    # Also clear any tombstone so the gate doesn't block the freshly uploaded table.
     replaced = await mcp.table_exists(table)
     context_store.evict(table)
+    data_watcher.clear_tombstone(table)
 
     # Write cleaned DataFrame to data directory. DuckDB reads it directly as a
     # view — no DDL, no INSERT batches needed.
