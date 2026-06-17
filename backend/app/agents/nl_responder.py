@@ -11,7 +11,7 @@ log = logging.getLogger("igna.agent.nl_responder")
 
 
 class NLResponder:
-    """Agent 4 — final NL answer; decides whether a figure is warranted."""
+    """Agent — turns SQL result rows into a natural-language answer."""
 
     name = "nl_responder"
 
@@ -24,18 +24,23 @@ class NLResponder:
         sql_result: dict[str, Any],
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        log.info("nl_responder ▶ | table=%s rows_seen=%d", table, sql_result.get("row_count", 0))
-        # Entry gate covered by orchestrator pre_responder. No MCP tools here.
-        system = load_prompt("nl_responder")
+        log.info("nl_responder | table=%s rows=%d", table, sql_result.get("row_count", 0))
+
         rows = sql_result.get("rows", [])
         total = sql_result.get("row_count", len(rows))
-        # Cap rows fed to the LLM to keep token cost bounded.
         sample = rows[:200]
         truncated = total > len(sample)
+
         schema_only = [
             {"name": c["name"], "type": c.get("type"), "semantic": c.get("semantic")}
             for c in context.get("columns", [])
         ]
+
+        # Schema in system prompt → stable prefix → Azure input-token cache hit.
+        system = (
+            load_prompt("nl_responder")
+            + f"\n\n## TABLE SCHEMA\n{json.dumps(schema_only)}"
+        )
         user = (
             f"USER QUESTION: {question}\n"
             f"INTENT: {parsed.get('intent')}\n"
@@ -43,12 +48,8 @@ class NLResponder:
             f"SQL: {sql_result.get('final_sql')}\n"
             f"ROW COUNT (full): {total}  (showing {len(sample)}{' — truncated' if truncated else ''})\n"
             f"ROWS:\n{json.dumps(sample, default=str)}\n\n"
-            f"SCHEMA: {json.dumps(schema_only)}\n\n"
             f"Reply ONLY with the JSON object."
         )
         result = await single_shot_json(system=system, user=user, phase=self.name)
-        log.info(
-            "nl_responder ✓ | wants_figure=%s answer=%s",
-            result.get("wants_figure"), trunc(result.get("answer"), 300),
-        )
+        log.info("nl_responder ok | wants_figure=%s answer=%s", result.get("wants_figure"), trunc(result.get("answer"), 300))
         return result

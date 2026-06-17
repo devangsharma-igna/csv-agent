@@ -1,7 +1,6 @@
-"""CSV parsing + schema inference. Pandas is used ONLY here, at the boundary.
+"""CSV parsing + schema inference. Pandas is used ONLY here, at the upload boundary.
 
-The rest of the backend talks to Supabase exclusively via MCP — pandas never
-touches the agent path.
+Agents never see a DataFrame — they query via DuckDB execute_sql.
 """
 
 from __future__ import annotations

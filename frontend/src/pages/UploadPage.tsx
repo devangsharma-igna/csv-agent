@@ -81,7 +81,7 @@ export default function UploadPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Upload CSV to Supabase</h1>
+      <h1 className="text-2xl font-semibold">Upload CSV to Database</h1>
 
       {!preview && (
         <div
@@ -229,7 +229,7 @@ export default function UploadPage() {
               disabled={busy || !tableName}
               onClick={onCommit}
             >
-              {busy ? 'Importing…' : `Import to Supabase${hasPk ? '' : ' (no PK)'}`}
+              {busy ? 'Importing…' : `Import to Database${hasPk ? '' : ' (no PK)'}`}
             </button>
             <button
               className="text-sm text-slate-500 hover:text-slate-800"

@@ -6,14 +6,13 @@ from fastapi import APIRouter, HTTPException
 
 from .. import context_store
 from ..agents.context_builder import ContextBuilder
-from ..mcp_client import mcp
+from ..db_client import mcp
 
 log = logging.getLogger("igna.tables")
 router = APIRouter()
 
 
 def _bare(name: str) -> str:
-    """Strip schema prefix: 'public.foo' → 'foo', 'foo' → 'foo'."""
     return name.split(".", 1)[-1] if "." in name else name
 
 
@@ -21,29 +20,19 @@ def _bare(name: str) -> str:
 async def list_tables() -> dict:
     tables = await mcp.list_tables(["public"])
     names = [_bare(t.get("name", "")) for t in tables if t.get("name")]
-    names = [n for n in names if n]  # drop any empties after stripping
+    names = [n for n in names if n]
     cached = set(context_store.list_cached())
     log.info("list_tables | found=%d with_context=%d", len(names), sum(1 for n in names if n in cached))
-    return {
-        "tables": [
-            {"name": n, "has_context": n in cached} for n in names
-        ]
-    }
+    return {"tables": [{"name": n, "has_context": n in cached} for n in names]}
 
 
 @router.get("/{table}/context")
 async def get_context_summary(table: str) -> dict:
-    """Lightweight summary of the cached context. Used by the Query page to
-    show context-presence + freshness at all times."""
     cached = context_store.load(table)
     exists_in_db = await mcp.table_exists(table)
     log.info("context_summary | table=%s cached=%s in_db=%s", table, bool(cached), exists_in_db)
     if not cached:
-        return {
-            "table": table,
-            "has_context": False,
-            "exists_in_db": exists_in_db,
-        }
+        return {"table": table, "has_context": False, "exists_in_db": exists_in_db}
     return {
         "table": table,
         "has_context": True,
@@ -62,11 +51,10 @@ async def get_context_summary(table: str) -> dict:
 
 @router.post("/{table}/refresh")
 async def refresh_context(table: str) -> dict:
-    log.info("refresh_context ▶ | table=%s", table)
+    log.info("refresh_context | table=%s", table)
     if not await mcp.table_exists(table):
-        log.warning("refresh_context ✗ | table_deleted table=%s", table)
         raise HTTPException(status_code=410, detail={"error": "table_deleted", "table": table})
     context = await ContextBuilder().build(table)
     context_store.save(table, context)
-    log.info("refresh_context ✓ | table=%s", table)
+    log.info("refresh_context done | table=%s", table)
     return {"ok": True, "table": table}

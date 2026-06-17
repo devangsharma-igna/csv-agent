@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -10,7 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .logging_utils import trunc
-from .mcp_client import mcp
+from .db_client import mcp
+from . import data_watcher
 from .routers import csv as csv_router
 from .routers import query as query_router
 from .routers import tables as tables_router
@@ -20,7 +22,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-5s %(name)s | %(message)s",
     datefmt="%H:%M:%S",
 )
-# Tame chatty third-party loggers; we still see warnings/errors from them.
 for noisy in ("httpx", "httpcore", "openai._base_client", "urllib3"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
@@ -31,10 +32,13 @@ log = logging.getLogger("igna.http")
 async def lifespan(_: FastAPI):
     log.info("backend starting | log_level=%s frontend_origin=%s", settings.LOG_LEVEL, settings.FRONTEND_ORIGIN)
     await mcp.start()
+    data_watcher.set_event_loop(asyncio.get_running_loop())
+    data_watcher.start()
     try:
         yield
     finally:
         log.info("backend stopping")
+        data_watcher.stop()
         await mcp.stop()
 
 
@@ -52,16 +56,17 @@ app.add_middleware(
 async def log_requests(request: Request, call_next):
     rid = uuid.uuid4().hex[:8]
     t0 = time.perf_counter()
-    log.info("→ %s %s | rid=%s client=%s", request.method, request.url.path, rid, request.client.host if request.client else "?")
+    log.info("-> %s %s | rid=%s client=%s", request.method, request.url.path, rid, request.client.host if request.client else "?")
     try:
         response = await call_next(request)
-    except Exception as e:  # noqa: BLE001 - re-raised by Starlette
+    except Exception as e:  # noqa: BLE001
         dt = (time.perf_counter() - t0) * 1000
-        log.error("← %s %s | rid=%s 500 (%.0fms) exc=%s", request.method, request.url.path, rid, dt, trunc(str(e), 300))
+        log.error("<- %s %s | rid=%s 500 (%.0fms) exc=%s", request.method, request.url.path, rid, dt, trunc(str(e), 300))
         raise
     dt = (time.perf_counter() - t0) * 1000
-    log.info("← %s %s | rid=%s %d (%.0fms)", request.method, request.url.path, rid, response.status_code, dt)
+    log.info("<- %s %s | rid=%s %d (%.0fms)", request.method, request.url.path, rid, response.status_code, dt)
     return response
+
 
 app.include_router(csv_router.router, prefix="/api/csv", tags=["csv"])
 app.include_router(tables_router.router, prefix="/api/tables", tags=["tables"])

@@ -2,7 +2,7 @@
 You are a database analyst inferring column semantics from sample data.
 
 # Task
-You are given column specs for a Postgres table: name, type, cardinality, null rate, and up to 5 sample values. For each column write a **one-sentence semantic description** grounded in the sample values. Also identify the primary key column(s).
+You are given column specs for a SQL table: name, type, cardinality, null rate, and up to 5 sample values. For each column write a **one-sentence semantic description** grounded in the sample values. Also identify the primary key column(s).
 
 # Output (STRICT JSON)
 ```json

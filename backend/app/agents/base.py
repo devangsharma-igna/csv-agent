@@ -2,10 +2,9 @@
 
 - Azure OpenAI GPT-4.1 client (shared singleton).
 - Persona/few-shot prompt loader (markdown files in app/prompts/).
-- ReAct loop that lets the LLM call MCP-backed tools (execute_sql, list_tables)
-  with a strict iteration cap.
-- TableExistenceGate: re-checks table existence at every agent entry AND after
-  every MCP tool observation. Trips a TableDeletedError on first miss.
+- ReAct loop with a strict iteration cap.
+- TableExistenceGate: re-checks table existence at every agent boundary AND
+  after every tool observation. Trips TableDeletedError on first miss.
 """
 
 from __future__ import annotations
@@ -21,27 +20,23 @@ from openai import AsyncAzureOpenAI
 
 from ..config import settings
 from ..logging_utils import trunc
-from ..mcp_client import MCPToolError, mcp
+from ..db_client import MCPToolError, mcp
+from .. import data_watcher
 
 log = logging.getLogger("igna.agent")
 gate_log = logging.getLogger("igna.gate")
 llm_log = logging.getLogger("igna.llm")
 
-# Per-request gate cache — holds {table: exists_bool} for the lifetime of a
-# single query request. Entry-boundary gates read from this so they never hit
-# MCP more than once per request; in-loop gates always bypass it for safety.
 _request_gate_cache: ContextVar[dict[str, bool] | None] = ContextVar(
     "_request_gate_cache", default=None
 )
 
 
 def init_gate_cache() -> None:
-    """Call exactly once at the top of each query request handler."""
     _request_gate_cache.set({})
 
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
-
 
 _client: AsyncAzureOpenAI | None = None
 
@@ -58,17 +53,10 @@ def get_llm() -> AsyncAzureOpenAI:
 
 
 def load_prompt(name: str) -> str:
-    p = _PROMPTS_DIR / f"{name}.md"
-    return p.read_text(encoding="utf-8")
+    return (_PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
 
 
 class TableDeletedError(Exception):
-    """Raised by TableExistenceGate when the target table no longer exists.
-
-    Carries the phase (agent name) that observed the disappearance — surfaced
-    in the HTTP 410 response so the FE can show *which* gate tripped.
-    """
-
     def __init__(self, table: str, phase: str) -> None:
         super().__init__(f"Table '{table}' no longer exists (phase: {phase})")
         self.table = table
@@ -76,20 +64,11 @@ class TableDeletedError(Exception):
 
 
 class TableExistenceGate:
-    """Hard circuit breaker.
+    """Hard circuit breaker checked at every agent boundary and after every tool call.
 
-    Two modes, controlled by ``in_loop``:
-
-    * ``in_loop=False`` (default) — used at entry boundaries in the
-      orchestrator. Checks the per-request cache first; only hits MCP when
-      the table has not been checked yet this request. Saves 4+ MCP round-trips
-      per query (each ~700–1 100 ms) with no safety trade-off because the
-      in-loop gate is the actual deletion detector.
-
-    * ``in_loop=True`` — used inside ReAct loops after every MCP observation.
-      Always issues a fresh ``table_exists`` call so a deletion is caught
-      within one observation round-trip. Also updates the cache so a subsequent
-      boundary check sees the accurate state.
+    in_loop=False (boundary): checks per-request cache first, hits DB on miss.
+    in_loop=True  (in ReAct):  always issues a fresh check to catch mid-loop deletion.
+    Tombstone is always checked first — fires instantly without any I/O.
     """
 
     def __init__(self, table: str, phase: str, *, in_loop: bool = False) -> None:
@@ -98,51 +77,43 @@ class TableExistenceGate:
         self.in_loop = in_loop
 
     async def check(self) -> None:
+        if data_watcher.is_tombstoned(self.table):
+            gate_log.warning("gate TRIPPED (tombstone) | phase=%s table=%s", self.phase, self.table)
+            raise TableDeletedError(self.table, self.phase)
+
         cache = _request_gate_cache.get()
 
         if not self.in_loop and cache is not None and self.table in cache:
-            # Cache hit — boundary check, result already known this request.
             exists = cache[self.table]
             if not exists:
-                gate_log.warning(
-                    "gate TRIPPED (cached) | phase=%s table=%s → HTTP 410",
-                    self.phase, self.table,
-                )
+                gate_log.warning("gate TRIPPED (cached) | phase=%s table=%s", self.phase, self.table)
                 raise TableDeletedError(self.table, self.phase)
             gate_log.debug("gate ok (cached) | phase=%s table=%s", self.phase, self.table)
             return
 
-        # Fresh MCP check (either in_loop=True or cache miss for this table).
         exists = await mcp.table_exists(self.table)
-
-        # Always update cache so subsequent boundary checks stay accurate.
         if cache is not None:
             cache[self.table] = exists
 
         if not exists:
-            gate_log.warning(
-                "gate TRIPPED | phase=%s table=%s → HTTP 410",
-                self.phase, self.table,
-            )
+            gate_log.warning("gate TRIPPED | phase=%s table=%s", self.phase, self.table)
             raise TableDeletedError(self.table, self.phase)
         gate_log.debug("gate ok | phase=%s table=%s", self.phase, self.table)
 
 
-# --- ReAct loop -------------------------------------------------------------
+# ── Tool helpers ──────────────────────────────────────────────────────────────
 
 Tool = dict[str, Any]
 ToolImpl = Callable[[dict[str, Any]], Awaitable[Any]]
 
 
-def supabase_select_tool() -> tuple[Tool, ToolImpl]:
-    """Read-only execute_sql tool exposed to agents that need to inspect data."""
-
+def db_select_tool() -> tuple[Tool, ToolImpl]:
     spec = {
         "type": "function",
         "function": {
             "name": "execute_sql",
             "description": (
-                "Execute a single read-only PostgreSQL SELECT against the user's Supabase. "
+                "Execute a single read-only SQL SELECT against the local database. "
                 "No DDL, no INSERT/UPDATE/DELETE. Returns the rows as JSON."
             ),
             "parameters": {
@@ -158,9 +129,9 @@ def supabase_select_tool() -> tuple[Tool, ToolImpl]:
         upper = q.upper()
         for forbidden in ("INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ", "TRUNCATE "):
             if forbidden in upper + " ":
-                log.warning("agent tried forbidden statement: %s | sql=%s", forbidden.strip(), trunc(q, 300))
+                log.warning("agent tried forbidden statement: %s", forbidden.strip())
                 raise MCPToolError("execute_sql", f"forbidden statement: {forbidden.strip()}")
-        log.info("agent SQL → %s", trunc(q, 400))
+        log.info("agent SQL -> %s", trunc(q, 400))
         return await mcp.execute_sql(q)
 
     return spec, impl
@@ -171,7 +142,7 @@ def list_tables_tool() -> tuple[Tool, ToolImpl]:
         "type": "function",
         "function": {
             "name": "list_tables",
-            "description": "List tables in the public schema of the user's Supabase.",
+            "description": "List tables in the public schema of the local database.",
             "parameters": {"type": "object", "properties": {}},
         },
     }
@@ -181,6 +152,8 @@ def list_tables_tool() -> tuple[Tool, ToolImpl]:
 
     return spec, impl
 
+
+# ── ReAct loop ────────────────────────────────────────────────────────────────
 
 async def react_loop(
     *,
@@ -192,16 +165,6 @@ async def react_loop(
     max_iter: int | None = None,
     observations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Run a ReAct loop. Returns the final JSON object the LLM produced.
-
-    - On every tool observation, re-runs the existence gate (if provided).
-    - Enforces max_iter (default from settings.MAX_REACT_ITERATIONS).
-    - Final assistant message MUST be valid JSON.
-    - If `observations` is provided, each successful tool call appends
-      `{tool, args, result}` to it — callers (e.g. SQL Agent) use this to
-      avoid asking the LLM to echo bulky tool results in its final JSON.
-    """
-
     llm = get_llm()
     tool_specs = [t[0] for t in tools]
     tool_impls = {t[0]["function"]["name"]: t[1] for t in tools}
@@ -211,10 +174,7 @@ async def react_loop(
     ]
     limit = max_iter or settings.MAX_REACT_ITERATIONS
     phase = gate.phase if gate else "?"
-    llm_log.info(
-        "ReAct start | phase=%s tools=%s max_iter=%d user=%s",
-        phase, [s["function"]["name"] for s in tool_specs], limit, trunc(user, 250),
-    )
+    llm_log.info("ReAct start | phase=%s tools=%s max_iter=%d", phase, [s["function"]["name"] for s in tool_specs], limit)
 
     for step in range(limit):
         kwargs: dict[str, Any] = {
@@ -234,8 +194,8 @@ async def react_loop(
         msg = resp.choices[0].message
         usage = getattr(resp, "usage", None)
         llm_log.info(
-            "LLM ↩ %s step=%d (%.0fms) | tokens=p%s/c%s tool_calls=%d",
-            phase, step + 1, dt,
+            "LLM step=%d (%.0fms) | tokens=p%s/c%s tool_calls=%d",
+            step + 1, dt,
             getattr(usage, "prompt_tokens", "?") if usage else "?",
             getattr(usage, "completion_tokens", "?") if usage else "?",
             len(msg.tool_calls or []),
@@ -246,11 +206,7 @@ async def react_loop(
                 "role": "assistant",
                 "content": msg.content or "",
                 "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
+                    {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                     for tc in msg.tool_calls
                 ],
             })
@@ -260,11 +216,9 @@ async def react_loop(
                     args = json.loads(tc.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                llm_log.info("LLM → tool %s | phase=%s args=%s", name, phase, trunc(args, 300))
                 impl = tool_impls.get(name)
                 if impl is None:
                     observation = {"error": f"unknown tool: {name}"}
-                    llm_log.warning("LLM unknown tool: %s", name)
                 else:
                     try:
                         observation = await impl(args)
@@ -272,12 +226,8 @@ async def react_loop(
                             observations.append({"tool": name, "args": args, "result": observation})
                     except MCPToolError as e:
                         observation = {"error": e.message}
-                        llm_log.warning("tool %s failed | %s", name, trunc(e.message, 300))
-                        # If the error is a "relation does not exist", the gate
-                        # will catch it on the next check — short-circuit early.
-                        if gate and ("does not exist" in e.message.lower()
-                                     or "undefined_table" in e.message.lower()):
-                            await gate.check()  # raises TableDeletedError
+                        if gate and ("does not exist" in e.message.lower() or "undefined_table" in e.message.lower()):
+                            await gate.check()
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -287,21 +237,15 @@ async def react_loop(
                     await gate.check()
             continue
 
-        # No tool call → assistant produced the final answer.
         content = msg.content or "{}"
         cleaned = _strip_code_fence(content)
         try:
             result = json.loads(cleaned)
-            llm_log.info("ReAct done | phase=%s steps=%d | result=%s", phase, step + 1, trunc(result, 400))
+            llm_log.info("ReAct done | phase=%s steps=%d", phase, step + 1)
             return result
         except json.JSONDecodeError:
-            llm_log.warning("LLM returned non-JSON, asking once more | phase=%s preview=%s", phase, trunc(content, 200))
-            # Ask once for valid JSON, then give up.
             messages.append({"role": "assistant", "content": content})
-            messages.append({
-                "role": "user",
-                "content": "Reply ONLY with the final JSON object as specified. No prose.",
-            })
+            messages.append({"role": "user", "content": "Reply ONLY with the final JSON object as specified. No prose."})
             resp2 = await llm.chat.completions.create(
                 model=settings.AZURE_OPENAI_DEPLOYMENT,
                 messages=messages,
@@ -314,13 +258,11 @@ async def react_loop(
 
 
 def _strip_code_fence(s: str) -> str:
-    """Models sometimes wrap JSON in ```json ... ``` despite instructions."""
     s = s.strip()
     if s.startswith("```"):
-        # drop opening fence (optionally ```json)
         nl = s.find("\n")
         if nl != -1:
-            s = s[nl + 1 :]
+            s = s[nl + 1:]
         else:
             s = s.lstrip("`").lstrip("json").lstrip()
         if s.endswith("```"):
@@ -329,16 +271,12 @@ def _strip_code_fence(s: str) -> str:
 
 
 async def single_shot_json(*, system: str, user: str, phase: str = "?") -> dict[str, Any]:
-    """Non-ReAct JSON-mode call. Used by NL Parser + NL Responder."""
     llm = get_llm()
-    llm_log.info("LLM ↪ single-shot | phase=%s user=%s", phase, trunc(user, 250))
+    llm_log.info("LLM single-shot | phase=%s user=%s", phase, trunc(user, 250))
     t0 = time.perf_counter()
     resp = await llm.chat.completions.create(
         model=settings.AZURE_OPENAI_DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=0.2,
         response_format={"type": "json_object"},
     )
@@ -346,10 +284,9 @@ async def single_shot_json(*, system: str, user: str, phase: str = "?") -> dict[
     usage = getattr(resp, "usage", None)
     result = json.loads(resp.choices[0].message.content or "{}")
     llm_log.info(
-        "LLM ↩ single-shot | phase=%s (%.0fms) tokens=p%s/c%s result=%s",
+        "LLM single-shot done | phase=%s (%.0fms) tokens=p%s/c%s",
         phase, dt,
         getattr(usage, "prompt_tokens", "?") if usage else "?",
         getattr(usage, "completion_tokens", "?") if usage else "?",
-        trunc(result, 400),
     )
     return result

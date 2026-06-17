@@ -246,7 +246,7 @@ function ContextBadge({
   if (!ctx.exists_in_db) {
     return (
       <div className="text-sm px-3 py-2 bg-red-50 border border-red-200 rounded text-red-800">
-        ⚠ Table <b>{ctx.table}</b> no longer exists in Supabase.
+        ⚠ Table <b>{ctx.table}</b> no longer exists in Database.
       </div>
     );
   }
