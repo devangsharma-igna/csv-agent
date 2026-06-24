@@ -304,6 +304,43 @@ Open http://localhost:5173.
 
 ---
 
+## Database tools and implementation locations
+
+The LLM does not call Supabase MCP tools directly. The Query Planner generates
+PostgreSQL as structured JSON. The backend then executes reads immediately or
+holds writes until explicit user confirmation.
+
+| Tool / component | Used for | Exact location |
+|---|---|---|
+| Query Planner LLM | Classifies read/write intent and generates PostgreSQL, a summary, and affected-table metadata. It does not execute SQL. | [`backend/app/agents/query_planner.py`](backend/app/agents/query_planner.py) |
+| Query Planner prompt | Defines the planner JSON contract and PostgreSQL read/write rules. | [`backend/app/prompts/query_planner.md`](backend/app/prompts/query_planner.md) |
+| Supabase MCP `execute_sql` | Executes all LLM-generated reads and explicitly confirmed DML/DDL writes. | [`backend/app/db_client.py`](backend/app/db_client.py) |
+| Supabase MCP `list_tables` | Lists tables in the Supabase `public` schema for the frontend selector. | [`backend/app/db_client.py`](backend/app/db_client.py) |
+| Supabase MCP `apply_migration` | Available for migration-style SQL, but currently unused by the active pipeline. | [`backend/app/db_client.py`](backend/app/db_client.py) |
+| MCP response normalizer | Converts Supabase response envelopes and untrusted-data wrappers into row dictionaries. | [`backend/app/db_client.py`](backend/app/db_client.py) |
+| Query orchestrator | Loads context, invokes the planner, executes reads, creates write previews, and handles confirm/cancel requests. | [`backend/app/routers/query.py`](backend/app/routers/query.py) |
+| Pending write store | Stores the exact server-side SQL awaiting confirmation and makes confirmation IDs single-use. | [`backend/app/pending_writes.py`](backend/app/pending_writes.py) |
+| SQL classifier | Independently classifies DML, DDL, and ambiguous SQL as mutating so confirmation cannot be bypassed. | [`backend/app/sql_safety.py`](backend/app/sql_safety.py) |
+| Generic ReAct `execute_sql` tool | Read-only agent tool retained in shared scaffolding. It is not passed to the active single-shot Query Planner. | [`backend/app/agents/base.py`](backend/app/agents/base.py) |
+| Generic ReAct `list_tables` tool | Table-listing agent tool retained in shared scaffolding. It is not used by the active Query Planner. | [`backend/app/agents/base.py`](backend/app/agents/base.py) |
+| Direct PostgreSQL `psycopg` upload | Transactionally drops/recreates a table and bulk-loads validated CSV rows using PostgreSQL `COPY`. CSV ingestion intentionally does not use MCP. | [`backend/app/supabase_upload.py`](backend/app/supabase_upload.py) |
+| CSV upload router | Handles preview, null fills, PK checks, upload invocation, and post-upload context rebuilding. | [`backend/app/routers/csv.py`](backend/app/routers/csv.py) |
+| Context Builder | Uses MCP `execute_sql` for schema inspection, samples, row counts, distinct counts, and null percentages. | [`backend/app/agents/context_builder.py`](backend/app/agents/context_builder.py) |
+| Local context store | Saves and loads table-specific context at `context/{table}.json`. | [`backend/app/context_store.py`](backend/app/context_store.py) |
+| Frontend API client | Calls query, confirm, and cancel endpoints. | [`frontend/src/api.ts`](frontend/src/api.ts) |
+| Frontend confirmation UI | Displays the write summary and SQL and provides Confirm and Cancel controls. | [`frontend/src/pages/QueryPage.tsx`](frontend/src/pages/QueryPage.tsx) |
+
+### Active operation paths
+
+- **Read:** Query Planner â†’ SQL classifier â†’ Supabase MCP `execute_sql`
+  â†’ NL Responder â†’ optional Figure Builder.
+- **Write:** Query Planner â†’ SQL classifier â†’ pending write store â†’
+  frontend confirmation â†’ Supabase MCP `execute_sql` â†’ context rebuild.
+- **CSV upload:** CSV router â†’ pandas validation/type coercion â†’ direct
+  `psycopg` transaction and `COPY` â†’ Context Builder through Supabase MCP.
+
+---
+
 ## What is intentionally not in scope
 
 - No auth / login.
