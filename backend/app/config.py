@@ -10,8 +10,11 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT: str = "gpt-4.1"
 
     CONTEXT_DIR: str = "../context"
-    DATA_DIR: str = "../data"
     FRONTEND_ORIGIN: str = "http://localhost:5173"
+    SUPABASE_MCP_URL: str = "https://mcp.supabase.com/mcp"
+    SUPABASE_PROJECT_REF: str = ""
+    SUPABASE_ACCESS_TOKEN: str = ""
+    SUPABASE_DB_URL: str = ""
 
     MAX_REACT_ITERATIONS: int = 8
     MAX_SQL_RETRIES: int = 2
@@ -27,10 +30,14 @@ class Settings(BaseSettings):
         return p
 
     @property
-    def data_path(self) -> Path:
-        p = Path(self.DATA_DIR).resolve()
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+    def supabase_mcp_url(self) -> str:
+        separator = "&" if "?" in self.SUPABASE_MCP_URL else "?"
+        params = []
+        if self.SUPABASE_PROJECT_REF and "project_ref=" not in self.SUPABASE_MCP_URL:
+            params.append(f"project_ref={self.SUPABASE_PROJECT_REF}")
+        if "features=" not in self.SUPABASE_MCP_URL:
+            params.append("features=database")
+        return self.SUPABASE_MCP_URL + (separator + "&".join(params) if params else "")
 
 
 settings = Settings()

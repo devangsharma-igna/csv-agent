@@ -21,7 +21,6 @@ from openai import AsyncAzureOpenAI
 from ..config import settings
 from ..logging_utils import trunc
 from ..db_client import MCPToolError, mcp
-from .. import data_watcher
 
 log = logging.getLogger("igna.agent")
 gate_log = logging.getLogger("igna.gate")
@@ -77,10 +76,6 @@ class TableExistenceGate:
         self.in_loop = in_loop
 
     async def check(self) -> None:
-        if data_watcher.is_tombstoned(self.table):
-            gate_log.warning("gate TRIPPED (tombstone) | phase=%s table=%s", self.phase, self.table)
-            raise TableDeletedError(self.table, self.phase)
-
         cache = _request_gate_cache.get()
 
         if not self.in_loop and cache is not None and self.table in cache:

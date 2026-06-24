@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
@@ -12,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .logging_utils import trunc
 from .db_client import mcp
-from . import data_watcher
 from .routers import csv as csv_router
 from .routers import query as query_router
 from .routers import tables as tables_router
@@ -32,13 +30,10 @@ log = logging.getLogger("igna.http")
 async def lifespan(_: FastAPI):
     log.info("backend starting | log_level=%s frontend_origin=%s", settings.LOG_LEVEL, settings.FRONTEND_ORIGIN)
     await mcp.start()
-    data_watcher.set_event_loop(asyncio.get_running_loop())
-    data_watcher.start()
     try:
         yield
     finally:
         log.info("backend stopping")
-        data_watcher.stop()
         await mcp.stop()
 
 

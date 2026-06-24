@@ -19,3 +19,6 @@ context/*.json
 .DS_Store
 Thumbs.db
 context/*.json
+
+data/
+context/
