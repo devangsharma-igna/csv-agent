@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
 import {
   askQuery,
+  cancelQuery,
+  confirmQuery,
   getContextSummary,
   listTables,
   refreshContext,
@@ -14,6 +16,8 @@ interface Msg {
   figure?: string | null;
   sql?: string | null;
   variant?: 'ok' | 'denied' | 'error';
+  confirmationId?: string;
+  pending?: boolean;
 }
 
 export default function QueryPage() {
@@ -30,7 +34,11 @@ export default function QueryPage() {
     try {
       const r = await listTables();
       setTables(r.tables);
-      if (!table && r.tables.length) setTable(r.tables[0].name);
+      if (!r.tables.length) {
+        setTable('');
+      } else if (!table || !r.tables.some(candidate => candidate.name === table)) {
+        setTable(r.tables[0].name);
+      }
     } catch (e: any) {
       setMessages(m => [...m, { role: 'system', variant: 'error', text: `Failed to list tables: ${e.message}` }]);
     }
@@ -70,6 +78,15 @@ export default function QueryPage() {
       const r = await askQuery(table, q);
       if (r.status === 'out_of_scope') {
         setMessages(m => [...m, { role: 'assistant', variant: 'denied', text: `🚫 Out of scope: ${r.reason}` }]);
+      } else if (r.status === 'confirmation_required') {
+        setMessages(m => [...m, {
+          role: 'assistant',
+          variant: 'denied',
+          text: r.summary || 'Confirm this database operation.',
+          sql: r.sql,
+          confirmationId: r.confirmation_id,
+          pending: true,
+        }]);
       } else {
         setMessages(m => [...m, {
           role: 'assistant',
@@ -94,6 +111,49 @@ export default function QueryPage() {
         setMessages(m => [...m, { role: 'assistant', variant: 'error', text: `Error: ${e.message}` }]);
       }
     } finally { setBusy(false); }
+  }
+
+  async function onConfirm(index: number, confirmationId: string) {
+    setBusy(true);
+    try {
+      const result = await confirmQuery(confirmationId);
+      setMessages(current => current.map((message, i) => i === index ? {
+        ...message,
+        variant: 'ok',
+        pending: false,
+        confirmationId: undefined,
+        text: `${result.summary}\n\nOperation completed${result.row_count ? ` and returned ${result.row_count} row(s)` : ''}.`,
+      } : message));
+      await loadTables();
+      if (result.table_exists) {
+        await loadContext(table);
+      } else {
+        setCtx(null);
+      }
+    } catch (e: any) {
+      setMessages(current => current.map((message, i) => i === index ? {
+        ...message,
+        variant: 'error',
+        pending: false,
+        confirmationId: undefined,
+        text: `Write failed: ${e.message}`,
+      } : message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCancel(index: number, confirmationId: string) {
+    try {
+      await cancelQuery(confirmationId);
+    } finally {
+      setMessages(current => current.map((message, i) => i === index ? {
+        ...message,
+        pending: false,
+        confirmationId: undefined,
+        text: `${message.text}\n\nCancelled. No database changes were made.`,
+      } : message));
+    }
   }
 
   async function onRefreshContext() {
@@ -203,6 +263,24 @@ export default function QueryPage() {
                   <summary className="cursor-pointer">SQL</summary>
                   <pre className="bg-slate-900 text-slate-100 p-2 rounded overflow-x-auto">{m.sql}</pre>
                 </details>
+              )}
+              {m.pending && m.confirmationId && (
+                <div className="mt-3 flex gap-2 border-t border-amber-200 pt-3">
+                  <button
+                    onClick={() => onConfirm(i, m.confirmationId!)}
+                    disabled={busy}
+                    className="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    Confirm operation
+                  </button>
+                  <button
+                    onClick={() => onCancel(i, m.confirmationId!)}
+                    disabled={busy}
+                    className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
               )}
             </div>
           </div>

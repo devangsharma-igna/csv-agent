@@ -33,13 +33,24 @@ export interface CommitRequest {
 }
 
 export interface QueryResponse {
-  status: 'ok' | 'out_of_scope';
+  status: 'ok' | 'out_of_scope' | 'confirmation_required';
   answer?: string;
   figure_b64?: string | null;
   sql?: string;
   row_count?: number;
   parsed?: Record<string, unknown>;
   reason?: string;
+  confirmation_id?: string;
+  summary?: string;
+  expires_at?: string;
+}
+
+export interface WriteResponse {
+  status: 'write_ok';
+  summary: string;
+  rows: Record<string, unknown>[];
+  row_count: number;
+  table_exists: boolean;
 }
 
 export interface TablesResponse {
@@ -106,5 +117,19 @@ export async function askQuery(table: string, question: string): Promise<QueryRe
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ table, question }),
+  }));
+}
+
+export async function confirmQuery(confirmationId: string): Promise<WriteResponse> {
+  return unwrap(await fetch('/api/query/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation_id: confirmationId }),
+  }));
+}
+
+export async function cancelQuery(confirmationId: string): Promise<{ cancelled: boolean }> {
+  return unwrap(await fetch(`/api/query/pending/${encodeURIComponent(confirmationId)}`, {
+    method: 'DELETE',
   }));
 }

@@ -8,6 +8,7 @@ from typing import Any
 from ..config import settings
 from ..logging_utils import trunc
 from ..db_client import MCPToolError, mcp
+from ..sql_safety import is_mutating_sql
 from .base import TableExistenceGate, load_prompt, single_shot_json
 
 log = logging.getLogger("igna.agent.query_planner")
@@ -230,6 +231,10 @@ class QueryPlanner:
             if not sql:
                 log.warning("query_planner attempt %d: allowed but no SQL", attempt + 1)
                 break
+            if plan.get("operation") == "write" or is_mutating_sql(sql):
+                plan["operation"] = "write"
+                log.info("query_planner write preview | %s", trunc(sql, 400))
+                break
 
             log.info("query_planner attempt %d | %s", attempt + 1, trunc(sql, 400))
             try:
@@ -246,6 +251,7 @@ class QueryPlanner:
                     user = base_user + _RETRY_SUFFIX.format(error=last_error)
 
         plan["rows"] = rows
+        plan.setdefault("operation", "read")
         plan["row_count"] = plan.get("row_count") or len(rows)
         if last_error and not rows:
             plan.setdefault("notes", f"SQL failed after {1 + settings.MAX_SQL_RETRIES} attempts: {last_error}")

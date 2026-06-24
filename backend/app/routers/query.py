@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-import asyncio
+import datetime as dt
 import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import context_store, data_watcher
+from .. import context_store
 from ..agents.base import TableDeletedError, TableExistenceGate, init_gate_cache
 from ..agents.context_builder import ContextBuilder
 from ..agents.figure_builder import FigureBuilder
 from ..agents.nl_responder import NLResponder
 from ..agents.query_planner import QueryPlanner
 from ..logging_utils import trunc
-from ..db_client import MCPToolError
+from ..db_client import MCPToolError, mcp
+from ..pending_writes import pending_writes
+from ..sql_safety import is_mutating_sql
 
 log = logging.getLogger("igna.query")
 router = APIRouter()
@@ -23,6 +25,10 @@ router = APIRouter()
 class QueryRequest(BaseModel):
     table: str
     question: str
+
+
+class ConfirmRequest(BaseModel):
+    confirmation_id: str
 
 
 @router.post("/query")
@@ -34,9 +40,6 @@ async def query(req: QueryRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="missing table")
     log.info("query START | table=%s question=%s", table, trunc(req.question, 250))
     init_gate_cache()
-
-    task = asyncio.current_task()
-    data_watcher.register_task(table, task)
 
     try:
         log.info("phase=pre_pipeline | gate check")
@@ -64,6 +67,26 @@ async def query(req: QueryRequest) -> dict[str, Any]:
             }
 
         parsed = plan
+        sql = (plan.get("final_sql") or "").strip()
+        if not sql:
+            raise RuntimeError("query planner allowed the request but returned no SQL")
+        if plan.get("operation") == "write" or is_mutating_sql(sql):
+            pending = pending_writes.create(
+                table=table,
+                sql=sql,
+                summary=plan.get("summary") or plan.get("refined_query") or "Execute the proposed database operation.",
+                affected_tables=plan.get("affected_tables") or [table],
+            )
+            return {
+                "status": "confirmation_required",
+                "confirmation_id": pending.confirmation_id,
+                "summary": pending.summary,
+                "sql": pending.sql,
+                "expires_at": dt.datetime.fromtimestamp(
+                    pending.expires_at, tz=dt.timezone.utc
+                ).isoformat(),
+            }
+
         sql_result = {
             "final_sql": plan.get("final_sql"),
             "row_count": plan.get("row_count"),
@@ -99,18 +122,6 @@ async def query(req: QueryRequest) -> dict[str, Any]:
             "parsed": parsed,
         }
 
-    except asyncio.CancelledError:
-        log.warning("query CANCELLED (table deleted mid-flight) | table=%s", table)
-        context_store.evict(table)
-        raise HTTPException(
-            status_code=410,
-            detail={
-                "error": "table_deleted",
-                "table": table,
-                "phase": "mid_llm_call",
-                "message": f"Table '{table}' was deleted while the query was running.",
-            },
-        )
     except TableDeletedError as e:
         log.warning("query ABORT (table_deleted) | table=%s phase=%s", e.table, e.phase)
         context_store.evict(e.table)
@@ -124,5 +135,39 @@ async def query(req: QueryRequest) -> dict[str, Any]:
     except RuntimeError as e:
         log.error("query ABORT (agent_failure) | %s", trunc(str(e), 400))
         raise HTTPException(status_code=500, detail={"error": "agent_failure", "message": str(e)}) from e
-    finally:
-        data_watcher.unregister_task(table, task)
+
+
+@router.post("/query/confirm")
+async def confirm_query(req: ConfirmRequest) -> dict[str, Any]:
+    pending = pending_writes.consume(req.confirmation_id)
+    if pending is None:
+        raise HTTPException(status_code=410, detail={"error": "confirmation_expired"})
+
+    try:
+        rows = await mcp.execute_sql(pending.sql)
+    except MCPToolError as e:
+        raise HTTPException(status_code=502, detail={"error": "db_error", "message": e.message}) from e
+
+    for affected in pending.affected_tables:
+        context_store.evict(affected.split(".", 1)[-1])
+
+    selected_exists = await mcp.table_exists(pending.table)
+    if selected_exists:
+        try:
+            context = await ContextBuilder().build(pending.table)
+            context_store.save(pending.table, context)
+        except Exception:
+            log.exception("write succeeded but context rebuild failed | table=%s", pending.table)
+
+    return {
+        "status": "write_ok",
+        "summary": pending.summary,
+        "rows": rows,
+        "row_count": len(rows),
+        "table_exists": selected_exists,
+    }
+
+
+@router.delete("/query/pending/{confirmation_id}")
+async def cancel_query(confirmation_id: str) -> dict[str, bool]:
+    return {"cancelled": pending_writes.cancel(confirmation_id)}
