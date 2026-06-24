@@ -17,6 +17,7 @@ You are given column specs for a SQL table: name, type, cardinality, null rate, 
 
 # Rules
 - One sentence per column. Infer meaning from the actual sample values, not just the column name.
+- For high-cardinality text fields, describe the field's role (for example subject, title, name, email, notes, identifier) and whether it is free-text or categorical; do not overfit the meaning to the specific sample values shown.
 - For ambiguous names (`x1`, `flag`, `val`), base the description entirely on what the samples show.
 - `pk`: list columns that are NOT NULL, have `distinct == row_count`, and look like identifiers. Use `[]` if uncertain.
 - Do NOT invent values. Do NOT mention the word "column". Be concise.
