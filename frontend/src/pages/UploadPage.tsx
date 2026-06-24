@@ -199,30 +199,6 @@ export default function UploadPage() {
             </table>
           </div>
 
-          <div className="bg-white rounded border p-3">
-            <h3 className="text-sm font-medium mb-2">First rows preview</h3>
-            <div className="overflow-x-auto">
-              <table className="text-xs">
-                <thead>
-                  <tr>{cols.map((c, i) => <th key={i} className="px-2 py-1 text-left bg-slate-100">{c.name}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {preview.preview_rows.map((r, i) => (
-                    <tr key={i}>
-                      {cols.map((c, j) => (
-                        <td key={j} className="px-2 py-1 border-t">
-                          {r[c.original_name as keyof typeof r] != null
-                            ? String(r[c.original_name as keyof typeof r])
-                            : <span className="text-slate-300">null</span>}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
           <div className="flex items-center gap-3">
             <button
               className="bg-blue-600 hover:bg-blue-700 text-white rounded px-4 py-2 text-sm disabled:opacity-50"
