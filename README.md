@@ -388,9 +388,24 @@ holds writes until explicit user confirmation.
 
 ---
 
+## Local access control
+
+| Role | Username | Password | Access |
+|---|---|---|---|
+| Super Admin | `igna.admin@gmail.com` | `admin@123` | Reads, CSV uploads, context rebuilds, and confirmed DML/DDL including destructive operations |
+| User | `igna.user@gmail.com` | `user@123` | Read-only queries and raw-result viewing |
+
+- There is no signup or JWT. Authentication uses an HTTP-only browser-session cookie.
+- Logging out or closing the browser ends client access; restarting the backend invalidates all in-memory sessions.
+- Super Admin writes and DDL retain the existing SQL preview and confirmation step.
+- Raw SQL pasted into chat is rejected for both roles. Database operations must be requested in natural language.
+- Successful reads expose at most 200 returned rows through the scrollable **Raw data** dropdown beside the SQL dropdown.
+
+---
+
 ## What is intentionally not in scope
 
-- No auth / login.
+- No external identity provider, signup, password reset, or persistent user store; credentials are hardcoded for controlled/local deployment.
 - No multi-table joins — one CSV, one table, one context.
 - No data cleaning beyond null-fills.
 - No deployment — desktop only.
