@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     MAX_SQL_RETRIES: int = 2
     NL_PARSER_MAX_COLUMNS: int = 25
     LOG_LEVEL: str = "INFO"
+    AUTH_COOKIE_SECURE: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
