@@ -71,6 +71,26 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
+const ERROR_MESSAGES: Record<string, string> = {
+  read_only_role: 'Your account has read-only access. Only a Super Admin can modify the database.',
+  super_admin_required: 'Only a Super Admin can perform this operation.',
+  authentication_required: 'Your session has ended. Please sign in again.',
+  confirmation_expired: 'This confirmation has expired. Please submit the request again.',
+  invalid_credentials: 'Invalid username or password.',
+};
+
+function errorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') {
+    const structured = detail as { error?: unknown; message?: unknown };
+    if (typeof structured.message === 'string') return structured.message;
+    if (typeof structured.error === 'string') {
+      return ERROR_MESSAGES[structured.error] ?? structured.error.replaceAll('_', ' ');
+    }
+  }
+  return fallback || 'Request failed.';
+}
+
 async function unwrap<T>(resp: Response): Promise<T> {
   // Read the body exactly once. The Fetch API forbids reading it twice — doing
   // resp.json() then resp.text() in a catch yields "body stream already read".
@@ -83,7 +103,7 @@ async function unwrap<T>(resp: Response): Promise<T> {
       onUnauthorized?.();
     }
     const detail = parsed?.detail ?? parsed ?? text;
-    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    const err = new Error(errorMessage(detail, resp.statusText));
     (err as any).status = resp.status;
     (err as any).detail = detail;
     throw err;
