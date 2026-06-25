@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from .. import context_store
 from ..agents.context_builder import ContextBuilder
+from ..auth import CurrentUser, require_super_admin, require_user
 from ..db_client import mcp
 
 log = logging.getLogger("igna.tables")
@@ -17,7 +18,9 @@ def _bare(name: str) -> str:
 
 
 @router.get("")
-async def list_tables() -> dict:
+async def list_tables(
+    _user: CurrentUser = Depends(require_user),
+) -> dict:
     tables = await mcp.list_tables(["public"])
     names = [_bare(t.get("name", "")) for t in tables if t.get("name")]
     names = [n for n in names if n]
@@ -27,7 +30,10 @@ async def list_tables() -> dict:
 
 
 @router.get("/{table}/context")
-async def get_context_summary(table: str) -> dict:
+async def get_context_summary(
+    table: str,
+    _user: CurrentUser = Depends(require_user),
+) -> dict:
     cached = context_store.load(table)
     exists_in_db = await mcp.table_exists(table)
     log.info("context_summary | table=%s cached=%s in_db=%s", table, bool(cached), exists_in_db)
@@ -50,7 +56,10 @@ async def get_context_summary(table: str) -> dict:
 
 
 @router.post("/{table}/refresh")
-async def refresh_context(table: str) -> dict:
+async def refresh_context(
+    table: str,
+    _admin: CurrentUser = Depends(require_super_admin),
+) -> dict:
     log.info("refresh_context | table=%s", table)
     if not await mcp.table_exists(table):
         raise HTTPException(status_code=410, detail={"error": "table_deleted", "table": table})

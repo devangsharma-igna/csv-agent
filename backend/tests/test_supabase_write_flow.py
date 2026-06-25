@@ -235,12 +235,15 @@ class PendingWriteStoreTests(unittest.TestCase):
             sql="DELETE FROM tickets WHERE ticket_id = 7",
             summary="Delete ticket 7.",
             affected_tables=["tickets"],
+            owner_session_id="admin-session",
         )
 
-        consumed = store.consume(pending.confirmation_id)
+        consumed = store.consume(pending.confirmation_id, "admin-session")
 
         self.assertEqual(consumed.sql, pending.sql)
-        self.assertIsNone(store.consume(pending.confirmation_id))
+        self.assertIsNone(
+            store.consume(pending.confirmation_id, "admin-session")
+        )
 
     def test_cancelled_write_cannot_be_consumed(self) -> None:
         store = PendingWriteStore(ttl_seconds=300)
@@ -249,16 +252,20 @@ class PendingWriteStoreTests(unittest.TestCase):
             sql="DROP TABLE tickets",
             summary="Drop tickets.",
             affected_tables=["tickets"],
+            owner_session_id="admin-session",
         )
 
-        self.assertTrue(store.cancel(pending.confirmation_id))
-        self.assertIsNone(store.consume(pending.confirmation_id))
+        self.assertTrue(
+            store.cancel(pending.confirmation_id, "admin-session")
+        )
+        self.assertIsNone(
+            store.consume(pending.confirmation_id, "admin-session")
+        )
 
 
 class QueryPlannerWriteTests(unittest.IsolatedAsyncioTestCase):
-    def test_query_marks_injected_user_as_intentionally_unused(self) -> None:
-        self.assertIn("_user", inspect.signature(query).parameters)
-        self.assertNotIn("user", inspect.signature(query).parameters)
+    def test_query_exposes_current_user_dependency(self) -> None:
+        self.assertIn("user", inspect.signature(query).parameters)
 
     async def test_query_rejects_raw_sql_for_both_roles_before_pipeline(self) -> None:
         users = [

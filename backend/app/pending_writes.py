@@ -12,6 +12,7 @@ class PendingWrite:
     sql: str
     summary: str
     affected_tables: list[str]
+    owner_session_id: str
     expires_at: float
 
 
@@ -27,6 +28,7 @@ class PendingWriteStore:
         sql: str,
         summary: str,
         affected_tables: list[str],
+        owner_session_id: str,
     ) -> PendingWrite:
         self._purge()
         confirmation_id = secrets.token_urlsafe(24)
@@ -36,18 +38,25 @@ class PendingWriteStore:
             sql=sql,
             summary=summary,
             affected_tables=affected_tables,
+            owner_session_id=owner_session_id,
             expires_at=time.time() + self.ttl_seconds,
         )
         self._items[confirmation_id] = pending
         return pending
 
-    def consume(self, confirmation_id: str) -> PendingWrite | None:
+    def consume(
+        self,
+        confirmation_id: str,
+        owner_session_id: str,
+    ) -> PendingWrite | None:
         self._purge()
-        return self._items.pop(confirmation_id, None)
+        pending = self._items.get(confirmation_id)
+        if pending is None or pending.owner_session_id != owner_session_id:
+            return None
+        return self._items.pop(confirmation_id)
 
-    def cancel(self, confirmation_id: str) -> bool:
-        self._purge()
-        return self._items.pop(confirmation_id, None) is not None
+    def cancel(self, confirmation_id: str, owner_session_id: str) -> bool:
+        return self.consume(confirmation_id, owner_session_id) is not None
 
     def _purge(self) -> None:
         now = time.time()

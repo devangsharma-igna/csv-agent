@@ -13,7 +13,7 @@ from ..agents.context_builder import ContextBuilder
 from ..agents.figure_builder import FigureBuilder
 from ..agents.nl_responder import NLResponder
 from ..agents.query_planner import QueryPlanner
-from ..auth import CurrentUser, require_user
+from ..auth import CurrentUser, Role, require_super_admin, require_user
 from ..logging_utils import trunc
 from ..db_client import MCPToolError, mcp
 from ..pending_writes import pending_writes
@@ -35,7 +35,7 @@ class ConfirmRequest(BaseModel):
 @router.post("/query")
 async def query(
     req: QueryRequest,
-    _user: CurrentUser = Depends(require_user),
+    user: CurrentUser = Depends(require_user),
 ) -> dict[str, Any]:
     if looks_like_raw_sql(req.question):
         raise HTTPException(
@@ -87,11 +87,17 @@ async def query(
         if not sql:
             raise RuntimeError("query planner allowed the request but returned no SQL")
         if plan.get("operation") == "write" or is_mutating_sql(sql):
+            if user.role != Role.SUPER_ADMIN:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "read_only_role"},
+                )
             pending = pending_writes.create(
                 table=table,
                 sql=sql,
                 summary=plan.get("summary") or plan.get("refined_query") or "Execute the proposed database operation.",
                 affected_tables=plan.get("affected_tables") or [table],
+                owner_session_id=user.session_id,
             )
             return {
                 "status": "confirmation_required",
@@ -135,6 +141,7 @@ async def query(
             "figure_b64": figure_b64,
             "sql": sql_result.get("final_sql"),
             "row_count": sql_result.get("row_count"),
+            "rows": sql_result.get("rows", [])[:200],
             "parsed": parsed,
         }
 
@@ -154,8 +161,11 @@ async def query(
 
 
 @router.post("/query/confirm")
-async def confirm_query(req: ConfirmRequest) -> dict[str, Any]:
-    pending = pending_writes.consume(req.confirmation_id)
+async def confirm_query(
+    req: ConfirmRequest,
+    admin: CurrentUser = Depends(require_super_admin),
+) -> dict[str, Any]:
+    pending = pending_writes.consume(req.confirmation_id, admin.session_id)
     if pending is None:
         raise HTTPException(status_code=410, detail={"error": "confirmation_expired"})
 
@@ -185,5 +195,13 @@ async def confirm_query(req: ConfirmRequest) -> dict[str, Any]:
 
 
 @router.delete("/query/pending/{confirmation_id}")
-async def cancel_query(confirmation_id: str) -> dict[str, bool]:
-    return {"cancelled": pending_writes.cancel(confirmation_id)}
+async def cancel_query(
+    confirmation_id: str,
+    admin: CurrentUser = Depends(require_super_admin),
+) -> dict[str, bool]:
+    return {
+        "cancelled": pending_writes.cancel(
+            confirmation_id,
+            admin.session_id,
+        )
+    }

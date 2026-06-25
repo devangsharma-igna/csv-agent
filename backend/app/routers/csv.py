@@ -5,11 +5,12 @@ import logging
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .. import context_store
 from ..agents.context_builder import ContextBuilder
+from ..auth import CurrentUser, require_super_admin
 from ..csv_inference import CsvPreview, parse_csv, sanitize_table
 from ..db_client import mcp
 from ..supabase_upload import (
@@ -38,7 +39,10 @@ class CommitRequest(BaseModel):
 
 
 @router.post("/preview")
-async def csv_preview(file: UploadFile = File(...)) -> dict[str, Any]:
+async def csv_preview(
+    file: UploadFile = File(...),
+    _admin: CurrentUser = Depends(require_super_admin),
+) -> dict[str, Any]:
     raw = await file.read()
     try:
         preview = parse_csv(raw, file.filename or "table")
@@ -51,7 +55,10 @@ async def csv_preview(file: UploadFile = File(...)) -> dict[str, Any]:
 
 
 @router.post("/commit")
-async def csv_commit(req: CommitRequest) -> dict[str, Any]:
+async def csv_commit(
+    req: CommitRequest,
+    _admin: CurrentUser = Depends(require_super_admin),
+) -> dict[str, Any]:
     cached = _PREVIEW_CACHE.get(req.preview_id)
     if cached is None:
         raise HTTPException(status_code=400, detail="preview expired; re-upload the CSV")
