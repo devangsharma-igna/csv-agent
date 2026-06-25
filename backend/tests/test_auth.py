@@ -132,7 +132,24 @@ class AuthenticationConfigTests(unittest.TestCase):
 
 class AuthenticationEndpointTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = TestClient(app)
+        self.client = TestClient(app, base_url="https://testserver")
+        self.addCleanup(self.client.close)
+        self.session_ids: list[str] = []
+        self.addCleanup(self._revoke_created_sessions)
+
+    def _login(self, username: str, password: str):
+        response = self.client.post(
+            "/api/auth/login",
+            json={"username": username, "password": password},
+        )
+        session_id = response.cookies.get(SESSION_COOKIE)
+        if session_id is not None:
+            self.session_ids.append(session_id)
+        return response
+
+    def _revoke_created_sessions(self) -> None:
+        for session_id in self.session_ids:
+            sessions.revoke(session_id)
 
     def test_login_sets_session_cookie_contract(self) -> None:
         original_secure = settings.AUTH_COOKIE_SECURE
@@ -144,12 +161,9 @@ class AuthenticationEndpointTests(unittest.TestCase):
             original_secure,
         )
 
-        response = self.client.post(
-            "/api/auth/login",
-            json={
-                "username": "igna.user@gmail.com",
-                "password": "user@123",
-            },
+        response = self._login(
+            "igna.user@gmail.com",
+            "user@123",
         )
 
         self.assertEqual(response.status_code, 200)
@@ -167,12 +181,9 @@ class AuthenticationEndpointTests(unittest.TestCase):
         self.assertNotIn("expires=", cookie.lower())
 
     def test_login_rejects_bad_password_generically(self) -> None:
-        response = self.client.post(
-            "/api/auth/login",
-            json={
-                "username": "igna.user@gmail.com",
-                "password": "wrong",
-            },
+        response = self._login(
+            "igna.user@gmail.com",
+            "wrong",
         )
 
         self.assertEqual(response.status_code, 401)
@@ -183,12 +194,9 @@ class AuthenticationEndpointTests(unittest.TestCase):
         self.assertNotIn("set-cookie", response.headers)
 
     def test_me_returns_authenticated_identity(self) -> None:
-        login = self.client.post(
-            "/api/auth/login",
-            json={
-                "username": "igna.admin@gmail.com",
-                "password": "admin@123",
-            },
+        login = self._login(
+            "igna.admin@gmail.com",
+            "admin@123",
         )
 
         response = self.client.get("/api/auth/me")
@@ -204,12 +212,17 @@ class AuthenticationEndpointTests(unittest.TestCase):
         )
 
     def test_logout_revokes_session_and_clears_cookie(self) -> None:
-        login = self.client.post(
-            "/api/auth/login",
-            json={
-                "username": "igna.user@gmail.com",
-                "password": "user@123",
-            },
+        original_secure = settings.AUTH_COOKIE_SECURE
+        settings.AUTH_COOKIE_SECURE = True
+        self.addCleanup(
+            setattr,
+            settings,
+            "AUTH_COOKIE_SECURE",
+            original_secure,
+        )
+        login = self._login(
+            "igna.user@gmail.com",
+            "user@123",
         )
         session_id = login.cookies[SESSION_COOKIE]
 
@@ -220,6 +233,9 @@ class AuthenticationEndpointTests(unittest.TestCase):
         self.assertIsNone(sessions.get(session_id))
         cookie = response.headers["set-cookie"]
         self.assertIn(f"{SESSION_COOKIE}=", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=strict", cookie)
+        self.assertIn("Secure", cookie)
         self.assertIn("Max-Age=0", cookie)
         self.assertIn("Path=/", cookie)
 
@@ -241,9 +257,25 @@ class AuthenticationEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
+            response.headers["access-control-allow-origin"],
+            settings.FRONTEND_ORIGIN,
+        )
+        self.assertEqual(
             response.headers["access-control-allow-credentials"],
             "true",
         )
+
+    def test_cors_rejects_unapproved_origin(self) -> None:
+        response = self.client.options(
+            "/api/auth/me",
+            headers={
+                "Origin": "https://unapproved.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn("access-control-allow-origin", response.headers)
 
 
 if __name__ == "__main__":
