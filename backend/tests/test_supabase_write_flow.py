@@ -97,6 +97,21 @@ class ToolResultNormalizationTests(unittest.TestCase):
 
 
 class SqlClassificationTests(unittest.TestCase):
+    def test_rejects_sql_after_comments_containing_semicolons(self) -> None:
+        samples = [
+            "/* note; */ DROP TABLE tickets",
+            "-- note;\nDROP TABLE tickets",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertTrue(looks_like_raw_sql(sample))
+
+    def test_handles_long_adversarial_select_case_input(self) -> None:
+        candidate = "SELECT CASE " + ("WHEN true " * 20_000)
+
+        self.assertTrue(looks_like_raw_sql(candidate))
+
     def test_rejects_commented_trailing_and_modified_sql_statements(self) -> None:
         samples = [
             "-- comment\nDROP TABLE tickets",

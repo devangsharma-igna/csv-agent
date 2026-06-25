@@ -12,7 +12,7 @@ _RAW_SQL_STARTS = (
         r"^\s*SELECT\s+(?:"
         r".+\s+FROM\b|"
         r"[*\d'\"(]|"
-        r"CASE\b.+\bWHEN\b.+\bTHEN\b.+\bEND\b|"
+        r"CASE\b|"
         r"(?:NULL|TRUE|FALSE)\s*;?\s*$|"
         r"(?:CURRENT_(?:USER|ROLE|DATE|TIME|TIMESTAMP|SCHEMA|CATALOG)|"
         r"SESSION_USER|USER)\s*;?\s*$|"
@@ -52,10 +52,6 @@ _CODE_FENCE = re.compile(
     r"```(?:[A-Za-z0-9_+-]+[ \t]*)?\r?\n(?P<body>.*?)```",
     re.IGNORECASE | re.DOTALL,
 )
-_LEADING_SQL_COMMENT = re.compile(
-    r"^\s*(?:--[^\r\n]*(?:\r?\n|$)|/\*.*?\*/)",
-    re.DOTALL,
-)
 _SQL_INJECTION_SHAPE = re.compile(
     r"(?:\bUNION\s+SELECT\b)|"
     r"(?:['\"]\s*OR\s+\d+\s*=\s*\d+\s*(?:--|#|/\*))",
@@ -63,11 +59,39 @@ _SQL_INJECTION_SHAPE = re.compile(
 )
 
 
-def _strip_leading_sql_comments(text: str) -> str:
-    candidate = text
-    while match := _LEADING_SQL_COMMENT.match(candidate):
-        candidate = candidate[match.end():]
-    return candidate.strip()
+def _strip_sql_comments(text: str) -> str:
+    cleaned: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            cleaned.append(char)
+            if char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    index += 1
+                    cleaned.append(text[index])
+                else:
+                    quote = None
+        elif char in {"'", '"'}:
+            quote = char
+            cleaned.append(char)
+        elif text.startswith("--", index):
+            newline = text.find("\n", index + 2)
+            if newline == -1:
+                break
+            cleaned.append("\n")
+            index = newline
+        elif text.startswith("/*", index):
+            comment_end = text.find("*/", index + 2)
+            if comment_end == -1:
+                break
+            cleaned.append(" ")
+            index = comment_end + 1
+        else:
+            cleaned.append(char)
+        index += 1
+    return "".join(cleaned)
 
 
 def _split_sql_segments(text: str) -> list[str]:
@@ -99,8 +123,8 @@ def _executable_segments(text: str) -> list[str]:
     return [
         normalized
         for source in sources
-        for segment in _split_sql_segments(source)
-        if (normalized := _strip_leading_sql_comments(segment))
+        for segment in _split_sql_segments(_strip_sql_comments(source))
+        if (normalized := segment.strip())
     ]
 
 
