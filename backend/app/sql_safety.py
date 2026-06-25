@@ -8,7 +8,15 @@ _MUTATING_WORDS = {
     "INSERT", "MERGE", "REINDEX", "REVOKE", "TRUNCATE", "UPDATE", "VACUUM",
 }
 _RAW_SQL_STARTS = (
-    re.compile(r"^\s*SELECT\s+(?:.+\s+FROM\b|[*\d'\"(])", re.IGNORECASE | re.DOTALL),
+    re.compile(
+        r"^\s*SELECT\s+(?:"
+        r".+\s+FROM\b|"
+        r"[*\d'\"(]|"
+        r"(?:CURRENT_(?:USER|DATE|TIME|TIMESTAMP|SCHEMA|CATALOG)|SESSION_USER|USER)\b|"
+        r"[A-Za-z_][\w$]*\s*\("
+        r")",
+        re.IGNORECASE | re.DOTALL,
+    ),
     re.compile(r"^\s*INSERT\s+INTO\b", re.IGNORECASE),
     re.compile(r"^\s*UPDATE\s+[\w.\"-]+\s+SET\b", re.IGNORECASE),
     re.compile(r"^\s*DELETE\s+FROM\b", re.IGNORECASE),
@@ -29,6 +37,10 @@ _RAW_SQL_STARTS = (
     re.compile(r"^\s*MERGE\s+INTO\b", re.IGNORECASE),
 )
 _SQL_CODE_FENCE = re.compile(r"```sql\b", re.IGNORECASE)
+_OTHER_SQL_CODE_FENCE = re.compile(
+    r"```(?:postgresql[ \t]*)?\r?\n(?P<body>.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
 _SQL_INJECTION_SHAPE = re.compile(
     r"(?:\bUNION\s+SELECT\b)|"
     r"(?:['\"]\s*OR\s+\d+\s*=\s*\d+\s*(?:--|#|/\*))",
@@ -42,6 +54,11 @@ def looks_like_raw_sql(text: str) -> bool:
     if not candidate:
         return False
     if _SQL_CODE_FENCE.search(candidate):
+        return True
+    if any(
+        any(pattern.search(match.group("body")) for pattern in _RAW_SQL_STARTS)
+        for match in _OTHER_SQL_CODE_FENCE.finditer(candidate)
+    ):
         return True
     if _SQL_INJECTION_SHAPE.search(candidate):
         return True

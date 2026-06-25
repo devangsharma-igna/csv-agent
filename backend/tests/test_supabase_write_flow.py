@@ -96,6 +96,26 @@ class ToolResultNormalizationTests(unittest.TestCase):
 
 
 class SqlClassificationTests(unittest.TestCase):
+    def test_rejects_expression_only_select_chat(self) -> None:
+        samples = [
+            "SELECT current_user",
+            "SELECT version()",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertTrue(looks_like_raw_sql(sample))
+
+    def test_rejects_executable_sql_in_other_code_fences(self) -> None:
+        samples = [
+            "```\nSELECT * FROM tickets\n```",
+            "```postgresql\nDROP TABLE tickets\n```",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertTrue(looks_like_raw_sql(sample))
+
     def test_rejects_executable_sql_chat(self) -> None:
         samples = [
             "SELECT * FROM tickets",
