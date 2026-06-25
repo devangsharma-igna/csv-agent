@@ -9,6 +9,8 @@ import {
   refreshContext,
   type ContextSummary,
 } from '../api';
+import { useAuth } from '../auth';
+import RawDataTable from '../components/RawDataTable';
 
 interface Msg {
   role: 'user' | 'assistant' | 'system';
@@ -18,9 +20,12 @@ interface Msg {
   variant?: 'ok' | 'denied' | 'error';
   confirmationId?: string;
   pending?: boolean;
+  rows?: Record<string, unknown>[];
 }
 
 export default function QueryPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'super_admin';
   const [tables, setTables] = useState<{ name: string; has_context: boolean }[]>([]);
   const [table, setTable] = useState<string>('');
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -94,6 +99,7 @@ export default function QueryPage() {
           text: r.answer || '(no answer)',
           figure: r.figure_b64,
           sql: r.sql,
+          rows: r.rows ?? [],
         }]);
         // If this query built fresh context on the backend, refresh our view.
         if (!ctx?.has_context) loadContext(table);
@@ -122,6 +128,7 @@ export default function QueryPage() {
         variant: 'ok',
         pending: false,
         confirmationId: undefined,
+        rows: result.rows,
         text: `${result.summary}\n\nOperation completed${result.row_count ? ` and returned ${result.row_count} row(s)` : ''}.`,
       } : message));
       await loadTables();
@@ -188,15 +195,23 @@ export default function QueryPage() {
         <button onClick={loadTables} className="text-xs text-slate-500 hover:text-slate-800">
           refresh list
         </button>
-        <button
-          onClick={onRefreshContext}
-          disabled={!table || busy}
-          className="text-xs text-slate-500 hover:text-slate-800 disabled:opacity-50"
-        >rebuild context</button>
+        {isAdmin && (
+          <button
+            onClick={onRefreshContext}
+            disabled={!table || busy}
+            className="text-xs text-slate-500 hover:text-slate-800 disabled:opacity-50"
+          >rebuild context</button>
+        )}
       </div>
 
       {/* Row 2: always-visible context status for the active table */}
-      <ContextBadge ctx={ctx} loading={ctxLoading} expanded={ctxExpanded} onToggle={() => setCtxExpanded(v => !v)} />
+      <ContextBadge
+        ctx={ctx}
+        loading={ctxLoading}
+        expanded={ctxExpanded}
+        canRebuild={isAdmin}
+        onToggle={() => setCtxExpanded(v => !v)}
+      />
 
       {/* Row 3: chat transcript */}
       <div className="overflow-y-auto bg-white border rounded p-4 space-y-4">
@@ -264,7 +279,8 @@ export default function QueryPage() {
                   <pre className="bg-slate-900 text-slate-100 p-2 rounded overflow-x-auto">{m.sql}</pre>
                 </details>
               )}
-              {m.pending && m.confirmationId && (
+              {m.rows && <RawDataTable rows={m.rows} />}
+              {isAdmin && m.pending && m.confirmationId && (
                 <div className="mt-3 flex gap-2 border-t border-amber-200 pt-3">
                   <button
                     onClick={() => onConfirm(i, m.confirmationId!)}
@@ -308,11 +324,12 @@ export default function QueryPage() {
 }
 
 function ContextBadge({
-  ctx, loading, expanded, onToggle,
+  ctx, loading, expanded, canRebuild, onToggle,
 }: {
   ctx: ContextSummary | null;
   loading: boolean;
   expanded: boolean;
+  canRebuild: boolean;
   onToggle: () => void;
 }) {
   if (loading) {
@@ -332,7 +349,7 @@ function ContextBadge({
     return (
       <div className="text-sm px-3 py-2 bg-amber-50 border border-amber-200 rounded text-amber-900">
         ⚠ No cached context for <b>{ctx.table}</b>. The first query will build it
-        (≈10-20s), or click <i>rebuild context</i> above to warm it now.
+        (≈10-20s){canRebuild ? <> or click <i>rebuild context</i> above to warm it now.</> : '.'}
       </div>
     );
   }
