@@ -12,7 +12,9 @@ _RAW_SQL_STARTS = (
         r"^\s*SELECT\s+(?:"
         r".+\s+FROM\b|"
         r"[*\d'\"(]|"
-        r"(?:CURRENT_(?:USER|DATE|TIME|TIMESTAMP|SCHEMA|CATALOG)|SESSION_USER|USER)\b|"
+        r"(?:NULL|TRUE|FALSE)\s*;?\s*$|"
+        r"(?:CURRENT_(?:USER|ROLE|DATE|TIME|TIMESTAMP|SCHEMA|CATALOG)|"
+        r"SESSION_USER|USER)\s*;?\s*$|"
         r"[A-Za-z_][\w$]*\s*\("
         r")",
         re.IGNORECASE | re.DOTALL,
@@ -25,11 +27,15 @@ _RAW_SQL_STARTS = (
         r"(?:TABLE|VIEW|SCHEMA|DATABASE|INDEX|FUNCTION|PROCEDURE|ROLE|TYPE|TRIGGER)\b",
         re.IGNORECASE,
     ),
+    re.compile(r"^\s*DROP\s+OWNED\s+BY\b", re.IGNORECASE),
+    re.compile(r"^\s*ALTER\s+SYSTEM\s+(?:SET|RESET)\b", re.IGNORECASE),
+    re.compile(r"^\s*CREATE\s+USER\s+[\w\"-]+\b", re.IGNORECASE),
     re.compile(r"^\s*TRUNCATE\s+(?:TABLE\s+)?[\w.\"-]+\b", re.IGNORECASE),
     re.compile(r"^\s*GRANT\s+.+\s+(?:ON|TO)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"^\s*REVOKE\s+.+\s+(?:ON|FROM)\b", re.IGNORECASE | re.DOTALL),
     re.compile(
-        r"^\s*WITH\s+(?:RECURSIVE\s+)?[\w\"-]+\s+AS\s*\(",
+        r"^\s*WITH\s+(?:RECURSIVE\s+)?[\w\"-]+"
+        r"(?:\s*\([^)]*\))?\s+AS\s*\(",
         re.IGNORECASE,
     ),
     re.compile(r"^\s*CALL\s+[\w.\"-]+\s*\(", re.IGNORECASE),

@@ -96,6 +96,22 @@ class ToolResultNormalizationTests(unittest.TestCase):
 
 
 class SqlClassificationTests(unittest.TestCase):
+    def test_rejects_additional_structural_sql_forms(self) -> None:
+        samples = [
+            "SELECT NULL;",
+            "SELECT TRUE;",
+            "SELECT current_role;",
+            "DROP OWNED BY analyst;",
+            "ALTER SYSTEM SET work_mem='64MB';",
+            "CREATE USER analyst;",
+            "WITH x(n) AS (SELECT 1) SELECT * FROM x;",
+            "```\nSELECT NULL;\n```",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertTrue(looks_like_raw_sql(sample))
+
     def test_rejects_expression_only_select_chat(self) -> None:
         samples = [
             "SELECT current_user",
