@@ -16,6 +16,7 @@ context/*.json
 # Editor / OS
 .vscode/
 .idea/
+.worktrees/
 .DS_Store
 Thumbs.db
 context/*.json
