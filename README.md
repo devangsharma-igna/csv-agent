@@ -35,24 +35,25 @@ Completely data-agnostic: it knows nothing about your data until you upload it.
 
 ```mermaid
 flowchart LR
-    subgraph "Your computer — everything local"
-        FE["React app\n(2 pages)"]
+    subgraph Local["Local application"]
+        FE["React UI\nQuery + Upload pages"]
         BE["FastAPI backend"]
-        DDB[("DuckDB\nin-process")]
-        CSVs[("data/\n{table}.csv")]
-        Ctx[("context/\n{table}.json")]
-        W["Filesystem\nWatcher"]
+        PW[("Pending write store\n5-minute, single-use tokens")]
+        Ctx[("Local context cache\ncontext/{table}.json")]
 
         FE <-->|REST + JSON| BE
-        BE <-->|SQL| DDB
-        DDB -->|reads on every query| CSVs
         BE -->|read/write| Ctx
-        W -->|watches| CSVs
-        W -->|cancels tasks / evicts context| BE
+        BE -->|stage / consume / cancel| PW
     end
 
     LLM["Azure OpenAI\nGPT-4.1"]
-    BE -->|chat completions| LLM
+    MCP["Supabase MCP\nDatabase tools"]
+    PG[("Supabase PostgreSQL\npublic schema")]
+
+    BE -->|agent completions| LLM
+    BE -->|list_tables + execute_sql| MCP
+    MCP <-->|SQL| PG
+    BE -->|CSV replace via psycopg COPY| PG
 ```
 
 Everything runs on your machine. The only outbound network call is to Azure OpenAI.
@@ -67,26 +68,27 @@ Everything runs on your machine. The only outbound network call is to Azure Open
 
 ```mermaid
 flowchart TD
-    Q["User question\n'How many tickets are open?'"] --> P1
-    P1["1. Context Builder\nSenior DB Architect persona\nRuns once on upload.\nProfiles schema + column semantics."]
-    P1 --> P2
+    Q["User submits a question or operation"] --> C{"Context cached?"}
+    C -->|no| P1["1. Context Builder\nProfiles PostgreSQL schema, stats, and samples\nLLM adds semantics and PK inference"]
+    C -->|yes| P2
+    P1 --> P2["2. Query Planner\nScope gate + PostgreSQL generator\nExecutes reads with retry; previews writes"]
 
-    P2["2. Query Planner\nScope gate + SQL writer in one pass\nAllowed? → write + execute SQL.\nDenied? → short-circuit."]
-    P2 -->|allowed| P3
-    P2 -->|denied| OOS["Out of scope\n(200 + reason)"]
+    P2 -->|denied| OOS["Out of scope\n200 + reason"]
+    P2 -->|read rows| P3["3. NL Responder\nTurns rows into prose\nDecides whether a chart helps"]
+    P2 -->|mutating SQL| CONF["Confirmation required\nStore exact SQL server-side"]
 
-    P3["3. NL Responder\nData analyst persona\nTurns rows into prose.\nDecides if a chart helps."]
-    P3 -->|wants chart| P4
-    P3 -->|no chart| OUT
-    P4["4. Figure Builder\nNo LLM — pure matplotlib\nRenders PNG from spec."]
-    P4 --> OUT["Final answer\n(text + optional chart)"]
+    P3 -->|wants chart| P4["4. Figure Builder\nPure matplotlib; no LLM\nRenders a base64 PNG"]
+    P3 -->|no chart| OUT["Final answer\ntext + SQL"]
+    P4 --> OUT2["Final answer\ntext + SQL + chart"]
+    CONF -->|confirm| WRITE["Execute through Supabase MCP\nEvict and rebuild context"]
+    CONF -->|cancel or expire| STOP["No database change"]
 
     classDef agent fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e
     classDef abort fill:#fef2f2,stroke:#b91c1c,color:#7f1d1d
     classDef ok fill:#dcfce7,stroke:#15803d,color:#14532d
     class P1,P2,P3,P4 agent
-    class OOS abort
-    class OUT ok
+    class OOS,STOP abort
+    class OUT,OUT2,WRITE ok
 ```
 
 | # | Agent | Job | LLM style |
@@ -110,16 +112,28 @@ When you upload a CSV the **Context Builder** runs once and writes `context/{tab
 ```mermaid
 sequenceDiagram
     participant CB as Context Builder
-    participant DDB as DuckDB
+    participant MCP as Supabase MCP
+    participant PG as Supabase PostgreSQL
+    participant AOAI as Azure OpenAI
     participant FS as context/{table}.json
 
-    CB->>DDB: information_schema query (columns + types)
-    DDB-->>CB: col names, types, nullability
-    CB->>DDB: one-pass stats CTE (COUNT, DISTINCT, null % per col)
-    DDB-->>CB: row count + per-column stats
-    CB->>DDB: SELECT * FROM table LIMIT 8
-    DDB-->>CB: sample rows
-    Note over CB: Python builds stats<br/>LLM writes one-sentence<br/>semantic per column + PK
+    par Inspect schema
+        CB->>MCP: execute_sql(information_schema query)
+        MCP->>PG: Query columns and types
+        PG-->>MCP: Schema rows
+        MCP-->>CB: Column names, types, nullability
+    and Sample rows
+        CB->>MCP: execute_sql(SELECT * LIMIT 8)
+        MCP->>PG: Query table sample
+        PG-->>MCP: Sample rows
+        MCP-->>CB: Sample rows
+    end
+    CB->>MCP: execute_sql(COUNT, DISTINCT, null percentage)
+    MCP->>PG: Run generated aggregate query
+    PG-->>MCP: Table and column statistics
+    MCP-->>CB: Normalized statistics
+    CB->>AOAI: Column specs + samples
+    AOAI-->>CB: Column semantics + PK inference
     CB-->>FS: write context JSON
 ```
 
@@ -141,28 +155,55 @@ sequenceDiagram
     autonumber
     participant FE as React UI
     participant BE as FastAPI
-    participant W as Filesystem Watcher
     participant G as TableExistenceGate
+    participant CS as Context cache
     participant QP as Query Planner
+    participant MCP as Supabase MCP
+    participant PG as PostgreSQL
+    participant PW as Pending writes
     participant R as NL Responder
-    participant DDB as DuckDB
 
     FE->>BE: POST /api/query
-    Note over BE: register asyncio task for this table
-    BE->>G: file check (tombstone first, then Path.exists)
+    BE->>G: Check table existence
+    G->>MCP: execute_sql(information_schema EXISTS)
+    MCP->>PG: Check public table
+    PG-->>G: exists
+    BE->>CS: Load context/{table}.json
+    alt Context missing
+        BE->>BE: Run Context Builder and cache result
+    end
     BE->>QP: question (user turn) | context in system prompt
-    Note over QP: Azure prefix cache hit if same table queried recently
-    QP->>DDB: execute SQL (reads CSV fresh)
-    DDB-->>QP: rows
-    QP-->>BE: {allowed, sql, rows}
-    BE->>G: re-check pre-responder
-    BE->>R: question + rows (schema already in system prompt)
-    R-->>BE: {answer, wants_figure, figure_spec}
-    BE-->>FE: {answer, figure_b64, sql, row_count}
-
-    Note over W,BE: If CSV deleted at ANY point:
-    W->>BE: call_soon_threadsafe(task.cancel)
-    Note over BE: CancelledError in await llm.chat...<br/>HTTP 410 returned immediately
+    alt Out of scope
+        QP-->>BE: {allowed: false, reason}
+        BE-->>FE: 200 out_of_scope + reason
+    else Mutating SQL
+        QP-->>BE: {operation: write, final_sql}
+        BE->>PW: Store exact SQL with expiring confirmation ID
+        BE-->>FE: confirmation_required + summary + SQL
+        alt User confirms
+            FE->>BE: POST /api/query/confirm
+            BE->>PW: Consume confirmation ID once
+            BE->>MCP: execute_sql(stored SQL)
+            MCP->>PG: Execute DML or DDL
+            PG-->>MCP: Result
+            BE->>CS: Evict affected contexts
+            BE->>BE: Rebuild selected-table context if it still exists
+            BE-->>FE: write_ok
+        else User cancels
+            FE->>BE: DELETE /api/query/pending/{id}
+            BE->>PW: Remove pending write
+            BE-->>FE: cancelled
+        end
+    else Read-only SQL
+        QP->>MCP: execute_sql(final_sql)
+        MCP->>PG: Execute SELECT
+        PG-->>MCP: Rows
+        MCP-->>QP: Normalized rows
+        QP-->>BE: {operation: read, final_sql, rows}
+        BE->>R: question + rows + schema
+        R-->>BE: answer + optional figure spec
+        BE-->>FE: answer + SQL + optional chart
+    end
 ```
 
 ---
@@ -186,22 +227,28 @@ sequenceDiagram
     participant FE as Upload page
     participant BE as FastAPI
     participant PD as pandas (boundary only)
-    participant FS as data/{table}.csv
-    participant DDB as DuckDB
+    participant PG as Supabase PostgreSQL
+    participant MCP as Supabase MCP
     participant CB as Context Builder
+    participant FS as context/{table}.json
 
     FE->>BE: POST /api/csv/preview
     BE->>PD: parse + infer types, suggest PKs, count nulls
     PD-->>BE: column profiles + sample rows
     BE-->>FE: schema proposal
     FE->>BE: POST /api/csv/commit (user-confirmed schema)
-    BE->>BE: validate PK uniqueness (fail fast, nothing written yet)
-    BE->>FS: df.to_csv()
-    BE->>DDB: CREATE OR REPLACE VIEW public."table"\nAS SELECT * FROM read_csv('data/table.csv', columns={...})
+    BE->>PD: rename columns, fill nulls, coerce PostgreSQL types
+    BE->>BE: validate nullability and PK constraints
+    BE->>PG: psycopg transaction: DROP, CREATE, COPY CSV rows
+    PG-->>BE: commit replacement table
+    BE->>FS: evict old context
     BE->>CB: build context
-    CB->>DDB: information_schema + stats queries
+    CB->>MCP: execute_sql(schema, sample, and stats queries)
+    MCP->>PG: Inspect uploaded table
+    PG-->>MCP: Profile data
+    MCP-->>CB: Normalized rows
     CB-->>BE: context JSON
-    BE-->>BE: save context/{table}.json
+    BE->>FS: save context JSON
     BE-->>FE: {table, row_count, replaced}
 ```
 
