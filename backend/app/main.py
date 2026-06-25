@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .logging_utils import trunc
 from .db_client import mcp
+from .routers import auth as auth_router
 from .routers import csv as csv_router
 from .routers import query as query_router
 from .routers import tables as tables_router
@@ -44,6 +45,7 @@ app.add_middleware(
     allow_origins=[settings.FRONTEND_ORIGIN],
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
@@ -63,6 +65,7 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+app.include_router(auth_router.router, prefix="/api/auth", tags=["auth"])
 app.include_router(csv_router.router, prefix="/api/csv", tags=["csv"])
 app.include_router(tables_router.router, prefix="/api/tables", tags=["tables"])
 app.include_router(query_router.router, prefix="/api", tags=["query"])

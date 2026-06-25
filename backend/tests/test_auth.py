@@ -6,6 +6,7 @@ os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com
 os.environ.setdefault("AZURE_OPENAI_API_KEY", "test-key")
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from app.auth import (
     SESSION_COOKIE,
@@ -18,6 +19,8 @@ from app.auth import (
     sessions,
 )
 from app.config import Settings
+from app.config import settings
+from app.main import app
 
 
 class AuthenticationTests(unittest.TestCase):
@@ -125,6 +128,122 @@ class AuthenticationConfigTests(unittest.TestCase):
 
         self.assertEqual(SESSION_COOKIE, "igna_session")
         self.assertFalse(settings.AUTH_COOKIE_SECURE)
+
+
+class AuthenticationEndpointTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+
+    def test_login_sets_session_cookie_contract(self) -> None:
+        original_secure = settings.AUTH_COOKIE_SECURE
+        settings.AUTH_COOKIE_SECURE = True
+        self.addCleanup(
+            setattr,
+            settings,
+            "AUTH_COOKIE_SECURE",
+            original_secure,
+        )
+
+        response = self.client.post(
+            "/api/auth/login",
+            json={
+                "username": "igna.user@gmail.com",
+                "password": "user@123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"username": "igna.user@gmail.com", "role": "user"},
+        )
+        cookie = response.headers["set-cookie"]
+        self.assertIn(f"{SESSION_COOKIE}=", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=strict", cookie)
+        self.assertIn("Path=/", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertNotIn("Max-Age", cookie)
+        self.assertNotIn("expires=", cookie.lower())
+
+    def test_login_rejects_bad_password_generically(self) -> None:
+        response = self.client.post(
+            "/api/auth/login",
+            json={
+                "username": "igna.user@gmail.com",
+                "password": "wrong",
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json(),
+            {"detail": {"error": "invalid_credentials"}},
+        )
+        self.assertNotIn("set-cookie", response.headers)
+
+    def test_me_returns_authenticated_identity(self) -> None:
+        login = self.client.post(
+            "/api/auth/login",
+            json={
+                "username": "igna.admin@gmail.com",
+                "password": "admin@123",
+            },
+        )
+
+        response = self.client.get("/api/auth/me")
+
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "username": "igna.admin@gmail.com",
+                "role": "super_admin",
+            },
+        )
+
+    def test_logout_revokes_session_and_clears_cookie(self) -> None:
+        login = self.client.post(
+            "/api/auth/login",
+            json={
+                "username": "igna.user@gmail.com",
+                "password": "user@123",
+            },
+        )
+        session_id = login.cookies[SESSION_COOKIE]
+
+        response = self.client.post("/api/auth/logout")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+        self.assertIsNone(sessions.get(session_id))
+        cookie = response.headers["set-cookie"]
+        self.assertIn(f"{SESSION_COOKIE}=", cookie)
+        self.assertIn("Max-Age=0", cookie)
+        self.assertIn("Path=/", cookie)
+
+        me = self.client.get("/api/auth/me")
+        self.assertEqual(me.status_code, 401)
+        self.assertEqual(
+            me.json(),
+            {"detail": {"error": "authentication_required"}},
+        )
+
+    def test_cors_allows_browser_credentials(self) -> None:
+        response = self.client.options(
+            "/api/auth/me",
+            headers={
+                "Origin": settings.FRONTEND_ORIGIN,
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["access-control-allow-credentials"],
+            "true",
+        )
 
 
 if __name__ == "__main__":
