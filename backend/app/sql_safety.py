@@ -12,6 +12,7 @@ _RAW_SQL_STARTS = (
         r"^\s*SELECT\s+(?:"
         r".+\s+FROM\b|"
         r"[*\d'\"(]|"
+        r"CASE\b.+\bWHEN\b.+\bTHEN\b.+\bEND\b|"
         r"(?:NULL|TRUE|FALSE)\s*;?\s*$|"
         r"(?:CURRENT_(?:USER|ROLE|DATE|TIME|TIMESTAMP|SCHEMA|CATALOG)|"
         r"SESSION_USER|USER)\s*;?\s*$|"
@@ -20,10 +21,15 @@ _RAW_SQL_STARTS = (
         re.IGNORECASE | re.DOTALL,
     ),
     re.compile(r"^\s*INSERT\s+INTO\b", re.IGNORECASE),
-    re.compile(r"^\s*UPDATE\s+[\w.\"-]+\s+SET\b", re.IGNORECASE),
+    re.compile(r"^\s*UPDATE\s+(?:ONLY\s+)?[\w.\"-]+\s+SET\b", re.IGNORECASE),
     re.compile(r"^\s*DELETE\s+FROM\b", re.IGNORECASE),
     re.compile(
-        r"^\s*(?:DROP|ALTER|CREATE)\s+"
+        r"^\s*(?:DROP|ALTER)\s+"
+        r"(?:TABLE|VIEW|SCHEMA|DATABASE|INDEX|FUNCTION|PROCEDURE|ROLE|TYPE|TRIGGER)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?"
         r"(?:TABLE|VIEW|SCHEMA|DATABASE|INDEX|FUNCTION|PROCEDURE|ROLE|TYPE|TRIGGER)\b",
         re.IGNORECASE,
     ),
@@ -42,10 +48,13 @@ _RAW_SQL_STARTS = (
     re.compile(r"^\s*EXECUTE\s+[\w\"-]+\b", re.IGNORECASE),
     re.compile(r"^\s*MERGE\s+INTO\b", re.IGNORECASE),
 )
-_SQL_CODE_FENCE = re.compile(r"```sql\b", re.IGNORECASE)
-_OTHER_SQL_CODE_FENCE = re.compile(
-    r"```(?:postgresql[ \t]*)?\r?\n(?P<body>.*?)```",
+_CODE_FENCE = re.compile(
+    r"```(?:[A-Za-z0-9_+-]+[ \t]*)?\r?\n(?P<body>.*?)```",
     re.IGNORECASE | re.DOTALL,
+)
+_LEADING_SQL_COMMENT = re.compile(
+    r"^\s*(?:--[^\r\n]*(?:\r?\n|$)|/\*.*?\*/)",
+    re.DOTALL,
 )
 _SQL_INJECTION_SHAPE = re.compile(
     r"(?:\bUNION\s+SELECT\b)|"
@@ -54,21 +63,59 @@ _SQL_INJECTION_SHAPE = re.compile(
 )
 
 
+def _strip_leading_sql_comments(text: str) -> str:
+    candidate = text
+    while match := _LEADING_SQL_COMMENT.match(candidate):
+        candidate = candidate[match.end():]
+    return candidate.strip()
+
+
+def _split_sql_segments(text: str) -> list[str]:
+    segments: list[str] = []
+    start = 0
+    quote: str | None = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            if char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    index += 1
+                else:
+                    quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == ";":
+            segments.append(text[start:index])
+            start = index + 1
+        index += 1
+    segments.append(text[start:])
+    return segments
+
+
+def _executable_segments(text: str) -> list[str]:
+    sources = [text]
+    sources.extend(match.group("body") for match in _CODE_FENCE.finditer(text))
+    return [
+        normalized
+        for source in sources
+        for segment in _split_sql_segments(source)
+        if (normalized := _strip_leading_sql_comments(segment))
+    ]
+
+
 def looks_like_raw_sql(text: str) -> bool:
     """Return True when chat input structurally resembles executable SQL."""
     candidate = text.strip()
     if not candidate:
         return False
-    if _SQL_CODE_FENCE.search(candidate):
-        return True
-    if any(
-        any(pattern.search(match.group("body")) for pattern in _RAW_SQL_STARTS)
-        for match in _OTHER_SQL_CODE_FENCE.finditer(candidate)
-    ):
-        return True
     if _SQL_INJECTION_SHAPE.search(candidate):
         return True
-    return any(pattern.search(candidate) for pattern in _RAW_SQL_STARTS)
+    return any(
+        pattern.search(segment)
+        for segment in _executable_segments(candidate)
+        for pattern in _RAW_SQL_STARTS
+    )
 
 
 def is_mutating_sql(sql: str) -> bool:

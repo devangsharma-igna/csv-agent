@@ -1,3 +1,4 @@
+import inspect
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -96,6 +97,31 @@ class ToolResultNormalizationTests(unittest.TestCase):
 
 
 class SqlClassificationTests(unittest.TestCase):
+    def test_rejects_commented_trailing_and_modified_sql_statements(self) -> None:
+        samples = [
+            "-- comment\nDROP TABLE tickets",
+            "/* comment */ DELETE FROM tickets",
+            "hello; DROP TABLE tickets",
+            "CREATE TEMP TABLE tickets (id int)",
+            "CREATE OR REPLACE VIEW v AS SELECT 1",
+            "UPDATE ONLY tickets SET status='Closed'",
+            "SELECT CASE WHEN true THEN 1 END",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertTrue(looks_like_raw_sql(sample))
+
+    def test_allows_prose_semicolon_segments_with_sql_adjacent_words(self) -> None:
+        samples = [
+            "We discussed updates; select the best category for this report",
+            "Please create a summary; update me on ticket trends",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertFalse(looks_like_raw_sql(sample))
+
     def test_rejects_additional_structural_sql_forms(self) -> None:
         samples = [
             "SELECT NULL;",
@@ -215,6 +241,10 @@ class PendingWriteStoreTests(unittest.TestCase):
 
 
 class QueryPlannerWriteTests(unittest.IsolatedAsyncioTestCase):
+    def test_query_marks_injected_user_as_intentionally_unused(self) -> None:
+        self.assertIn("_user", inspect.signature(query).parameters)
+        self.assertNotIn("user", inspect.signature(query).parameters)
+
     async def test_query_rejects_raw_sql_for_both_roles_before_pipeline(self) -> None:
         users = [
             CurrentUser("igna.user@gmail.com", Role.USER, "session-user"),

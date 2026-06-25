@@ -35,7 +35,7 @@ class ConfirmRequest(BaseModel):
 @router.post("/query")
 async def query(
     req: QueryRequest,
-    user: CurrentUser = Depends(require_user),
+    _user: CurrentUser = Depends(require_user),
 ) -> dict[str, Any]:
     if looks_like_raw_sql(req.question):
         raise HTTPException(
