@@ -2,9 +2,12 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+
+from app.auth import CurrentUser, Role
 from app.db_client import normalize_tool_result
 from app.pending_writes import PendingWriteStore
-from app.sql_safety import is_mutating_sql
+from app.sql_safety import is_mutating_sql, looks_like_raw_sql
 from app.agents.query_planner import QueryPlanner
 from app.routers.query import QueryRequest, query
 
@@ -93,6 +96,45 @@ class ToolResultNormalizationTests(unittest.TestCase):
 
 
 class SqlClassificationTests(unittest.TestCase):
+    def test_rejects_executable_sql_chat(self) -> None:
+        samples = [
+            "SELECT * FROM tickets",
+            "INSERT INTO tickets (status) VALUES ('Open')",
+            "UPDATE tickets SET status = 'Closed'",
+            "DELETE FROM tickets",
+            "DROP TABLE tickets",
+            "ALTER TABLE tickets ADD COLUMN owner text",
+            "CREATE TABLE tickets (id integer)",
+            "TRUNCATE TABLE tickets",
+            "GRANT SELECT ON tickets TO analyst",
+            "REVOKE SELECT ON tickets FROM analyst",
+            "WITH x AS (DELETE FROM tickets RETURNING *) SELECT * FROM x",
+            "CALL close_ticket(7)",
+            "EXECUTE close_ticket",
+            "MERGE INTO tickets USING updates ON tickets.id = updates.id",
+            "```sql\nDROP TABLE tickets;\n```",
+            "show rows UNION SELECT password FROM users",
+            "' OR 1=1 --",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertTrue(looks_like_raw_sql(sample))
+
+    def test_allows_natural_language_with_sql_adjacent_words(self) -> None:
+        samples = [
+            "Show the selected tickets",
+            "Update me on how many tickets are open",
+            "Which table has the highest count?",
+            "Delete-related requests by category",
+            "Select the best category for this report",
+            "Create a summary of ticket trends",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                self.assertFalse(looks_like_raw_sql(sample))
+
     def test_select_is_read_only(self) -> None:
         self.assertFalse(is_mutating_sql("SELECT * FROM tickets"))
 
@@ -137,6 +179,51 @@ class PendingWriteStoreTests(unittest.TestCase):
 
 
 class QueryPlannerWriteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_query_rejects_raw_sql_for_both_roles_before_pipeline(self) -> None:
+        users = [
+            CurrentUser("igna.user@gmail.com", Role.USER, "session-user"),
+            CurrentUser("igna.admin@gmail.com", Role.SUPER_ADMIN, "session-admin"),
+        ]
+
+        for user in users:
+            with self.subTest(role=user.role):
+                with (
+                    patch("app.routers.query.init_gate_cache") as init_gate_cache,
+                    patch("app.routers.query.TableExistenceGate.check", new=AsyncMock()) as gate,
+                    patch("app.routers.query.context_store.load") as load_context,
+                    patch("app.routers.query.ContextBuilder.build", new=AsyncMock()) as build_context,
+                    patch("app.routers.query.QueryPlanner.plan", new=AsyncMock()) as planner,
+                    patch("app.routers.query.NLResponder.respond", new=AsyncMock()) as responder,
+                    patch("app.routers.query.mcp.execute_sql", new=AsyncMock()) as execute_sql,
+                ):
+                    with self.assertRaises(HTTPException) as raised:
+                        await query(
+                            QueryRequest(
+                                table="tickets",
+                                question="DROP TABLE tickets",
+                            ),
+                            user,
+                        )
+
+                self.assertEqual(raised.exception.status_code, 400)
+                self.assertEqual(
+                    raised.exception.detail,
+                    {
+                        "error": "raw_sql_denied",
+                        "message": (
+                            "Raw SQL is not accepted. Describe the operation "
+                            "in natural language."
+                        ),
+                    },
+                )
+                init_gate_cache.assert_not_called()
+                gate.assert_not_awaited()
+                load_context.assert_not_called()
+                build_context.assert_not_awaited()
+                planner.assert_not_awaited()
+                responder.assert_not_awaited()
+                execute_sql.assert_not_awaited()
+
     async def test_planner_does_not_execute_mutating_sql(self) -> None:
         context = {
             "table": "tickets",
@@ -177,7 +264,10 @@ class QueryPlannerWriteTests(unittest.IsolatedAsyncioTestCase):
             patch("app.routers.query.QueryPlanner.plan", new=AsyncMock(return_value=(write_plan, []))),
             patch("app.routers.query.NLResponder.respond", new=AsyncMock()) as responder,
         ):
-            result = await query(QueryRequest(table="tickets", question="delete ticket 7"))
+            result = await query(
+                QueryRequest(table="tickets", question="delete ticket 7"),
+                CurrentUser("igna.admin@gmail.com", Role.SUPER_ADMIN, "session-admin"),
+            )
 
         self.assertEqual(result["status"], "confirmation_required")
         self.assertEqual(result["sql"], write_plan["final_sql"])

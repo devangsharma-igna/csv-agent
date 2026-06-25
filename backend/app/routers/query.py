@@ -4,7 +4,7 @@ import datetime as dt
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .. import context_store
@@ -13,10 +13,11 @@ from ..agents.context_builder import ContextBuilder
 from ..agents.figure_builder import FigureBuilder
 from ..agents.nl_responder import NLResponder
 from ..agents.query_planner import QueryPlanner
+from ..auth import CurrentUser, require_user
 from ..logging_utils import trunc
 from ..db_client import MCPToolError, mcp
 from ..pending_writes import pending_writes
-from ..sql_safety import is_mutating_sql
+from ..sql_safety import is_mutating_sql, looks_like_raw_sql
 
 log = logging.getLogger("igna.query")
 router = APIRouter()
@@ -32,7 +33,22 @@ class ConfirmRequest(BaseModel):
 
 
 @router.post("/query")
-async def query(req: QueryRequest) -> dict[str, Any]:
+async def query(
+    req: QueryRequest,
+    user: CurrentUser = Depends(require_user),
+) -> dict[str, Any]:
+    if looks_like_raw_sql(req.question):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "raw_sql_denied",
+                "message": (
+                    "Raw SQL is not accepted. Describe the operation "
+                    "in natural language."
+                ),
+            },
+        )
+
     table = req.table.strip()
     if "." in table:
         table = table.split(".", 1)[1]
