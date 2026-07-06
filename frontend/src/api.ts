@@ -67,7 +67,7 @@ export interface AuthUser {
 
 let onUnauthorized: (() => void) | null = null;
 
-const API_BASE_URL = (import.meta.env.BACKEND_URL ?? '').replace(/\/$/, '');
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
 export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
