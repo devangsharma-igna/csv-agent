@@ -141,7 +141,24 @@ class AuthenticationConfigTests(unittest.TestCase):
 
         self.assertEqual(
             settings.frontend_origins,
-            ["https://one.example", "https://two.example"],
+            [
+                "https://one.example",
+                "https://two.example",
+                "http://localhost:5173",
+                "https://csv-frontend.up.railway.app",
+            ],
+        )
+
+    def test_frontend_origins_include_deployed_railway_frontend(self) -> None:
+        settings = Settings(
+            AZURE_OPENAI_ENDPOINT="https://example.openai.azure.com",
+            AZURE_OPENAI_API_KEY="test-key",
+            _env_file=None,
+        )
+
+        self.assertIn(
+            "https://csv-frontend.up.railway.app",
+            settings.frontend_origins,
         )
 
 
@@ -290,6 +307,25 @@ class AuthenticationEndpointTests(unittest.TestCase):
         self.assertEqual(
             response.headers["access-control-allow-origin"],
             settings.frontend_origins[0],
+        )
+        self.assertEqual(
+            response.headers["access-control-allow-credentials"],
+            "true",
+        )
+
+    def test_cors_allows_deployed_railway_frontend(self) -> None:
+        response = self.client.options(
+            "/api/auth/login",
+            headers={
+                "Origin": "https://csv-frontend.up.railway.app",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["access-control-allow-origin"],
+            "https://csv-frontend.up.railway.app",
         )
         self.assertEqual(
             response.headers["access-control-allow-credentials"],

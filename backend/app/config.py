@@ -1,9 +1,15 @@
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    DEFAULT_FRONTEND_ORIGINS: ClassVar[tuple[str, ...]] = (
+        "http://localhost:5173",
+        "https://csv-frontend.up.railway.app",
+    )
+
     AZURE_OPENAI_ENDPOINT: str
     AZURE_OPENAI_API_KEY: str
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
@@ -38,7 +44,10 @@ class Settings(BaseSettings):
             normalized = origin.strip().rstrip("/")
             if normalized:
                 origins.append(normalized)
-        return origins or ["http://localhost:5173"]
+        for origin in self.DEFAULT_FRONTEND_ORIGINS:
+            if origin not in origins:
+                origins.append(origin)
+        return origins
 
     @property
     def supabase_mcp_url(self) -> str:
