@@ -1,10 +1,10 @@
 [build]
 builder = "RAILPACK"
-buildCommand = "if [ -f pyproject.toml ]; then python -m pip install -e .; else python -m pip install -e backend; fi"
+buildCommand = "if [ -d backend ]; then cd backend; fi; python -m pip install --upgrade pip && python -m pip install -r requirements.txt && python -m pip install -e ."
 watchPatterns = ["/backend/**"]
 
 [deploy]
-startCommand = "python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+startCommand = "if [ -d backend ]; then cd backend; fi; python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
