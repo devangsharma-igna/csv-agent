@@ -67,6 +67,8 @@ export interface AuthUser {
 
 let onUnauthorized: (() => void) | null = null;
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
 export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
@@ -111,8 +113,8 @@ async function unwrap<T>(resp: Response): Promise<T> {
   return parsed as T;
 }
 
-async function request<T>(input: RequestInfo | URL, init: RequestInit = {}): Promise<T> {
-  return unwrap(await fetch(input, {
+async function request<T>(input: string, init: RequestInit = {}): Promise<T> {
+  return unwrap(await fetch(`${API_BASE_URL}${input}`, {
     ...init,
     credentials: 'include',
   }));
