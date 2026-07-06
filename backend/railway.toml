@@ -1,6 +1,6 @@
 [build]
 builder = "RAILPACK"
-buildCommand = "python -m pip install -e ."
+buildCommand = "if [ -f pyproject.toml ]; then python -m pip install -e .; else python -m pip install -e backend; fi"
 watchPatterns = ["/backend/**"]
 
 [deploy]
