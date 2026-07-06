@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     NL_PARSER_MAX_COLUMNS: int = 25
     LOG_LEVEL: str = "INFO"
     AUTH_COOKIE_SECURE: bool = False
+    AUTH_COOKIE_SAMESITE: str = "strict"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -29,6 +30,15 @@ class Settings(BaseSettings):
         p = Path(self.CONTEXT_DIR).resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def frontend_origins(self) -> list[str]:
+        origins = []
+        for origin in self.FRONTEND_ORIGIN.split(","):
+            normalized = origin.strip().rstrip("/")
+            if normalized:
+                origins.append(normalized)
+        return origins or ["http://localhost:5173"]
 
     @property
     def supabase_mcp_url(self) -> str:

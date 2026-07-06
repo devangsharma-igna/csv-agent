@@ -29,7 +29,7 @@ log = logging.getLogger("igna.http")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    log.info("backend starting | log_level=%s frontend_origin=%s", settings.LOG_LEVEL, settings.FRONTEND_ORIGIN)
+    log.info("backend starting | log_level=%s frontend_origins=%s", settings.LOG_LEVEL, settings.frontend_origins)
     await mcp.start()
     try:
         yield
@@ -42,7 +42,7 @@ app = FastAPI(title="IGNA Query Agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_ORIGIN],
+    allow_origins=settings.frontend_origins,
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,

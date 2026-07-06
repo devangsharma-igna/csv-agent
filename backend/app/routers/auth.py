@@ -39,7 +39,7 @@ async def login(credentials: LoginRequest, response: Response) -> dict[str, str]
         value=session_id,
         httponly=True,
         secure=settings.AUTH_COOKIE_SECURE,
-        samesite="strict",
+        samesite=settings.AUTH_COOKIE_SAMESITE,
         path="/",
     )
     return _identity(user)
@@ -60,7 +60,7 @@ async def logout(
         key=SESSION_COOKIE,
         httponly=True,
         secure=settings.AUTH_COOKIE_SECURE,
-        samesite="strict",
+        samesite=settings.AUTH_COOKIE_SAMESITE,
         path="/",
     )
     return {"status": "ok"}

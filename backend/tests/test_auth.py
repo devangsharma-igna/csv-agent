@@ -124,10 +124,25 @@ class AuthenticationConfigTests(unittest.TestCase):
         settings = Settings(
             AZURE_OPENAI_ENDPOINT="https://example.openai.azure.com",
             AZURE_OPENAI_API_KEY="test-key",
+            _env_file=None,
         )
 
         self.assertEqual(SESSION_COOKIE, "igna_session")
         self.assertFalse(settings.AUTH_COOKIE_SECURE)
+        self.assertEqual(settings.AUTH_COOKIE_SAMESITE, "strict")
+
+    def test_frontend_origin_normalization_accepts_commas_and_trailing_slashes(self) -> None:
+        settings = Settings(
+            AZURE_OPENAI_ENDPOINT="https://example.openai.azure.com",
+            AZURE_OPENAI_API_KEY="test-key",
+            FRONTEND_ORIGIN=" https://one.example/ , https://two.example ",
+            _env_file=None,
+        )
+
+        self.assertEqual(
+            settings.frontend_origins,
+            ["https://one.example", "https://two.example"],
+        )
 
 
 class AuthenticationEndpointTests(unittest.TestCase):
@@ -153,12 +168,20 @@ class AuthenticationEndpointTests(unittest.TestCase):
 
     def test_login_sets_session_cookie_contract(self) -> None:
         original_secure = settings.AUTH_COOKIE_SECURE
+        original_samesite = settings.AUTH_COOKIE_SAMESITE
         settings.AUTH_COOKIE_SECURE = True
+        settings.AUTH_COOKIE_SAMESITE = "none"
         self.addCleanup(
             setattr,
             settings,
             "AUTH_COOKIE_SECURE",
             original_secure,
+        )
+        self.addCleanup(
+            setattr,
+            settings,
+            "AUTH_COOKIE_SAMESITE",
+            original_samesite,
         )
 
         response = self._login(
@@ -174,7 +197,7 @@ class AuthenticationEndpointTests(unittest.TestCase):
         cookie = response.headers["set-cookie"]
         self.assertIn(f"{SESSION_COOKIE}=", cookie)
         self.assertIn("HttpOnly", cookie)
-        self.assertIn("SameSite=strict", cookie)
+        self.assertIn("SameSite=none", cookie)
         self.assertIn("Path=/", cookie)
         self.assertIn("Secure", cookie)
         self.assertNotIn("Max-Age", cookie)
@@ -213,12 +236,20 @@ class AuthenticationEndpointTests(unittest.TestCase):
 
     def test_logout_revokes_session_and_clears_cookie(self) -> None:
         original_secure = settings.AUTH_COOKIE_SECURE
+        original_samesite = settings.AUTH_COOKIE_SAMESITE
         settings.AUTH_COOKIE_SECURE = True
+        settings.AUTH_COOKIE_SAMESITE = "none"
         self.addCleanup(
             setattr,
             settings,
             "AUTH_COOKIE_SECURE",
             original_secure,
+        )
+        self.addCleanup(
+            setattr,
+            settings,
+            "AUTH_COOKIE_SAMESITE",
+            original_samesite,
         )
         login = self._login(
             "igna.user@gmail.com",
@@ -234,7 +265,7 @@ class AuthenticationEndpointTests(unittest.TestCase):
         cookie = response.headers["set-cookie"]
         self.assertIn(f"{SESSION_COOKIE}=", cookie)
         self.assertIn("HttpOnly", cookie)
-        self.assertIn("SameSite=strict", cookie)
+        self.assertIn("SameSite=none", cookie)
         self.assertIn("Secure", cookie)
         self.assertIn("Max-Age=0", cookie)
         self.assertIn("Path=/", cookie)
@@ -250,7 +281,7 @@ class AuthenticationEndpointTests(unittest.TestCase):
         response = self.client.options(
             "/api/auth/me",
             headers={
-                "Origin": settings.FRONTEND_ORIGIN,
+                "Origin": settings.frontend_origins[0],
                 "Access-Control-Request-Method": "GET",
             },
         )
@@ -258,7 +289,7 @@ class AuthenticationEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.headers["access-control-allow-origin"],
-            settings.FRONTEND_ORIGIN,
+            settings.frontend_origins[0],
         )
         self.assertEqual(
             response.headers["access-control-allow-credentials"],
